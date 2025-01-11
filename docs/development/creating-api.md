@@ -129,22 +129,22 @@ void Initialize(v8::Local<v8::Object> exports,
 
 In the [`typings/internal-ambient.d.ts`](https://github.com/electron/electron/blob/main/typings/internal-ambient.d.ts) file, we need to append a new property onto the `Process` interface like so:
 
-```ts title='typings/internal-ambient.d.ts'
+```ts title='typings/internal-ambient.d.ts' @ts-nocheck
 interface Process {
-    _linkedBinding(name: 'electron_browser_{api_name}', Electron.ApiName);
+    _linkedBinding(name: 'electron_browser_{api_name}'): Electron.ApiName;
 }
 ```
 
 At the very bottom of your `api_name.cc` file:
 
 ```cpp title='api_name.cc'
-NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_{api_name},Initialize)
+NODE_LINKED_BINDING_CONTEXT_AWARE(electron_browser_{api_name},Initialize)
 ```
 
 In your [`shell/common/node_bindings.cc`](https://github.com/electron/electron/blob/main/shell/common/node_bindings.cc) file, add your node binding name to Electron's built-in modules.
 
 ```cpp title='shell/common/node_bindings.cc'
-#define ELECTRON_BUILTIN_MODULES(V)      \
+#define ELECTRON_BROWSER_MODULES(V)      \
   V(electron_browser_{api_name})
 ```
 
@@ -158,13 +158,13 @@ We will need to create a new TypeScript file in the path that follows:
 
 `"lib/browser/api/{electron_browser_{api_name}}.ts"`
 
-An example of the contents of this file can be found [here](https://github.com/electron/electron/blob/main/lib/browser/api/native-image.ts).
+An example of the contents of this file can be found [here](https://github.com/electron/electron/blob/main/lib/browser/api/native-theme.ts).
 
 ### Expose your module to TypeScript
 
 Add your module to the module list found at `"lib/browser/api/module-list.ts"` like so:
 
-```typescript title='lib/browser/api/module-list.ts'
+```ts title='lib/browser/api/module-list.ts' @ts-nocheck
 export const browserModuleList: ElectronInternal.ModuleEntry[] = [
   { name: 'apiName', loader: () => require('./api-name') },
 ];

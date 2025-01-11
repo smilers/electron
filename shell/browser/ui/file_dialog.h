@@ -10,12 +10,17 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "shell/common/gin_helper/dictionary.h"
-#include "shell/common/gin_helper/promise.h"
+#include "base/memory/raw_ptr_exclusion.h"
 
 namespace electron {
 class NativeWindow;
 }
+
+namespace gin_helper {
+class Dictionary;
+template <typename T>
+class Promise;
+}  // namespace gin_helper
 
 namespace file_dialog {
 
@@ -44,7 +49,7 @@ enum SaveFileDialogProperty {
 };
 
 struct DialogSettings {
-  electron::NativeWindow* parent_window = nullptr;
+  RAW_PTR_EXCLUSION electron::NativeWindow* parent_window = nullptr;
   std::string title;
   std::string message;
   std::string button_label;

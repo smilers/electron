@@ -8,7 +8,7 @@ The `webFrameMain` module can be used to lookup frames across existing
 [`WebContents`](web-contents.md) instances. Navigation events are the common
 use case.
 
-```javascript
+```js
 const { BrowserWindow, webFrameMain } = require('electron')
 
 const win = new BrowserWindow({ width: 800, height: 1500 })
@@ -16,7 +16,7 @@ win.loadURL('https://twitter.com')
 
 win.webContents.on(
   'did-frame-navigate',
-  (event, url, isMainFrame, frameProcessId, frameRoutingId) => {
+  (event, url, httpResponseCode, httpStatusText, isMainFrame, frameProcessId, frameRoutingId) => {
     const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
     if (frame) {
       const code = 'document.body.innerHTML = document.body.innerHTML.replaceAll("heck", "h*ck")'
@@ -29,7 +29,7 @@ win.webContents.on(
 You can also access frames of existing pages by using the `mainFrame` property
 of [`WebContents`](web-contents.md).
 
-```javascript
+```js
 const { BrowserWindow } = require('electron')
 
 async function main () {
@@ -97,16 +97,19 @@ this limitation.
 
 Returns `boolean` - Whether the reload was initiated successfully. Only results in `false` when the frame has no history.
 
+#### `frame.isDestroyed()`
+
+Returns `boolean` - Whether the frame is destroyed.
+
 #### `frame.send(channel, ...args)`
 
 * `channel` string
 * `...args` any[]
 
 Send an asynchronous message to the renderer process via `channel`, along with
-arguments. Arguments will be serialized with the [Structured Clone
-Algorithm][SCA], just like [`postMessage`][], so prototype chains will not be
-included. Sending Functions, Promises, Symbols, WeakMaps, or WeakSets will
-throw an exception.
+arguments. Arguments will be serialized with the [Structured Clone Algorithm][SCA],
+just like [`postMessage`][], so prototype chains will not be included.
+Sending Functions, Promises, Symbols, WeakMaps, or WeakSets will throw an exception.
 
 The renderer process can handle the message by listening to `channel` with the
 [`ipcRenderer`](ipc-renderer.md) module.
@@ -128,8 +131,9 @@ For example:
 
 ```js
 // Main process
+const win = new BrowserWindow()
 const { port1, port2 } = new MessageChannelMain()
-webContents.mainFrame.postMessage('port', { message: 'hello' }, [port1])
+win.webContents.mainFrame.postMessage('port', { message: 'hello' }, [port1])
 
 // Renderer process
 ipcRenderer.on('port', (e, msg) => {
@@ -138,11 +142,69 @@ ipcRenderer.on('port', (e, msg) => {
 })
 ```
 
+#### `frame.collectJavaScriptCallStack()` _Experimental_
+
+Returns `Promise<string> | Promise<void>` - A promise that resolves with the currently running JavaScript call
+stack. If no JavaScript runs in the frame, the promise will never resolve. In cases where the call stack is
+otherwise unable to be collected, it will return `undefined`.
+
+This can be useful to determine why the frame is unresponsive in cases where there's long-running JavaScript.
+For more information, see the [proposed Crash Reporting API.](https://wicg.github.io/crash-reporting/)
+
+```js
+const { app } = require('electron')
+
+app.commandLine.appendSwitch('enable-features', 'DocumentPolicyIncludeJSCallStacksInCrashReports')
+
+app.on('web-contents-created', (_, webContents) => {
+  webContents.on('unresponsive', async () => {
+    // Interrupt execution and collect call stack from unresponsive renderer
+    const callStack = await webContents.mainFrame.collectJavaScriptCallStack()
+    console.log('Renderer unresponsive\n', callStack)
+  })
+})
+```
+
 ### Instance Properties
+
+#### `frame.ipc` _Readonly_
+
+An [`IpcMain`](ipc-main.md) instance scoped to the frame.
+
+IPC messages sent with `ipcRenderer.send`, `ipcRenderer.sendSync` or
+`ipcRenderer.postMessage` will be delivered in the following order:
+
+1. `contents.on('ipc-message')`
+2. `contents.mainFrame.on(channel)`
+3. `contents.ipc.on(channel)`
+4. `ipcMain.on(channel)`
+
+Handlers registered with `invoke` will be checked in the following order. The
+first one that is defined will be called, the rest will be ignored.
+
+1. `contents.mainFrame.handle(channel)`
+2. `contents.handle(channel)`
+3. `ipcMain.handle(channel)`
+
+In most cases, only the main frame of a WebContents can send or receive IPC
+messages. However, if the `nodeIntegrationInSubFrames` option is enabled, it is
+possible for child frames to send and receive IPC messages also. The
+[`WebContents.ipc`](web-contents.md#contentsipc-readonly) interface may be more
+convenient when `nodeIntegrationInSubFrames` is not enabled.
 
 #### `frame.url` _Readonly_
 
 A `string` representing the current URL of the frame.
+
+#### `frame.origin` _Readonly_
+
+A `string` representing the current origin of the frame, serialized according
+to [RFC 6454](https://www.rfc-editor.org/rfc/rfc6454). This may be different
+from the URL. For instance, if the frame is a child window opened to
+`about:blank`, then `frame.origin` will return the parent frame's origin, while
+`frame.url` will return the empty string. Pages without a scheme/host/port
+triple origin will have the serialized origin of `"null"` (that is, the string
+containing the letters n, u, l, l).
 
 #### `frame.top` _Readonly_
 
@@ -196,5 +258,13 @@ A `string` representing the [visibility state](https://developer.mozilla.org/en-
 
 See also how the [Page Visibility API](browser-window.md#page-visibility) is affected by other Electron APIs.
 
+#### `frame.detached` _Readonly_
+
+A `Boolean` representing whether the frame is detached from the frame tree. If a frame is accessed
+while the corresponding page is running any [unload][] listeners, it may become detached as the
+newly navigated page replaced it in the frame tree.
+
 [SCA]: https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm
 [`postMessage`]: https://developer.mozilla.org/en-US/docs/Web/API/Window/postMessage
+[`MessagePortMain`]: message-port-main.md
+[unload]: https://developer.mozilla.org/en-US/docs/Web/API/Window/unload_event

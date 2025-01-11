@@ -7,7 +7,8 @@
 
 #import <AppKit/AppKit.h>
 
-#include "base/mac/scoped_nsobject.h"
+#include "base/apple/owned_objc.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/devtools/devtools_contents_resizing_strategy.h"
 #include "ui/base/cocoa/base_view.h"
 
@@ -21,16 +22,12 @@ using electron::InspectableWebContentsViewMac;
 - (void)setMouseDownCanMoveWindow:(BOOL)can_move;
 @end
 
-@interface ControlRegionView : NSView
-@end
-
 @interface ElectronInspectableWebContentsView : BaseView <NSWindowDelegate> {
  @private
-  electron::InspectableWebContentsViewMac* inspectableWebContentsView_;
+  raw_ptr<electron::InspectableWebContentsViewMac> inspectableWebContentsView_;
 
-  base::scoped_nsobject<NSView> fake_view_;
-  base::scoped_nsobject<NSWindow> devtools_window_;
-  base::scoped_nsobject<ControlRegionView> devtools_mask_;
+  NSView* __strong fake_view_;
+  NSWindow* __strong devtools_window_;
   BOOL devtools_visible_;
   BOOL devtools_docked_;
   BOOL devtools_is_first_responder_;
@@ -42,6 +39,7 @@ using electron::InspectableWebContentsViewMac;
 - (instancetype)initWithInspectableWebContentsViewMac:
     (InspectableWebContentsViewMac*)view;
 - (void)notifyDevToolsFocused;
+- (void)setCornerRadii:(CGFloat)cornerRadius;
 - (void)setDevToolsVisible:(BOOL)visible activate:(BOOL)activate;
 - (BOOL)isDevToolsVisible;
 - (BOOL)isDevToolsFocused;
@@ -49,6 +47,7 @@ using electron::InspectableWebContentsViewMac;
 - (void)setContentsResizingStrategy:
     (const DevToolsContentsResizingStrategy&)strategy;
 - (void)setTitle:(NSString*)title;
+- (NSString*)getTitle;
 
 @end
 

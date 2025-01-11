@@ -4,14 +4,13 @@ Welcome to the Codespaces Electron Developer Environment.
 
 ## Quick Start
 
-Upon creation of your codespace you should have [build tools](https://github.com/electron/build-tools) installed and an initialized gclient checkout of Electron.  In order to build electron you'll need to run the following commands.
+Upon creation of your codespace you should have [build tools](https://github.com/electron/build-tools) installed and an initialized gclient checkout of Electron.  In order to build electron you'll need to run the following command.
 
 ```bash
-e sync -vv
 e build
 ```
 
-The initial sync will take approximately ~30 minutes and the build will take ~8 minutes.  Incremental syncs and incremental builds are substantially quicker.
+The initial build will take ~8 minutes.  Incremental builds are substantially quicker.  If you pull changes from upstream that touch either the `patches` folder or the `DEPS` folder you will have to run `e sync` in order to keep your checkout up to date.
 
 ## Directory Structure
 
@@ -26,9 +25,19 @@ Codespaces doesn't lean very well into gclient based checkouts, the directory st
 /workspaces/electron
 ```
 
-## Goma
+## Reclient
 
-If you are a maintainer [with Goma access](../docs/development/goma.md) it should be automatically configured and authenticated when you spin up a new codespaces instance.  You can validate this by checking `e d goma_auth info` or by checking that your build-tools configuration has a goma mode of `cluster`.
+If you are a maintainer [with Reclient access](../docs/development/reclient.md) you'll need to ensure you're authenticated when you spin up a new codespaces instance.  You can validate this by checking `e d rbe info` - your build-tools configuration should have `Access` type `Cache & Execute`:
+
+```console
+Authentication Status: Authenticated
+Since:     2024-05-28 10:29:33 +0200 CEST
+Expires:   2024-08-26 10:29:33 +0200 CEST
+...
+Access:    Cache & Execute
+```
+
+To authenticate if you're not logged in, run `e d rbe login` and follow the link to authenticate.
 
 ## Running Electron
 

@@ -7,8 +7,8 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "build/build_config.h"
 
 class GURL;
@@ -28,6 +28,7 @@ void OpenPath(const base::FilePath& full_path, OpenCallback callback);
 struct OpenExternalOptions {
   bool activate = true;
   base::FilePath working_dir;
+  bool log_usage = false;
 };
 
 // Open the given external protocol URL in the desktop's default manner.
@@ -48,14 +49,21 @@ bool GetFolderPath(int key, base::FilePath* result);
 #endif
 
 #if BUILDFLAG(IS_MAC)
-bool GetLoginItemEnabled();
-bool SetLoginItemEnabled(bool enabled);
+std::string GetLoginItemEnabled(const std::string& type,
+                                const std::string& service_name);
+bool SetLoginItemEnabled(const std::string& type,
+                         const std::string& service_name,
+                         bool enabled);
 #endif
 
 #if BUILDFLAG(IS_LINUX)
 // Returns a success flag.
 // Unlike libgtkui, does *not* use "chromium-browser.desktop" as a fallback.
 bool GetDesktopName(std::string* setme);
+
+// The XDG application ID must match the name of the desktop entry file without
+// the .desktop extension.
+std::string GetXdgAppId();
 #endif
 
 }  // namespace platform_util

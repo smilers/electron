@@ -4,23 +4,29 @@
 
 #include "shell/browser/api/electron_api_base_window.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "base/containers/contains.h"
+#include "base/task/single_thread_task_runner.h"
+#include "content/public/common/color_parser.h"
 #include "electron/buildflags/buildflags.h"
 #include "gin/dictionary.h"
-#include "shell/browser/api/electron_api_browser_view.h"
+#include "gin/handle.h"
 #include "shell/browser/api/electron_api_menu.h"
 #include "shell/browser/api/electron_api_view.h"
 #include "shell/browser/api/electron_api_web_contents.h"
 #include "shell/browser/javascript_environment.h"
+#include "shell/browser/native_window.h"
 #include "shell/common/color_util.h"
 #include "shell/common/gin_converters/callback_converter.h"
 #include "shell/common/gin_converters/file_path_converter.h"
 #include "shell/common/gin_converters/gfx_converter.h"
 #include "shell/common/gin_converters/image_converter.h"
 #include "shell/common/gin_converters/native_window_converter.h"
+#include "shell/common/gin_converters/optional_converter.h"
 #include "shell/common/gin_converters/value_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
@@ -33,8 +39,11 @@
 #endif
 
 #if BUILDFLAG(IS_WIN)
+#include "shell/browser/ui/views/win_frame_view.h"
 #include "shell/browser/ui/win/taskbar_host.h"
 #include "ui/base/win/shell.h"
+#elif BUILDFLAG(IS_LINUX)
+#include "shell/browser/ui/views/opaque_frame_view.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -43,7 +52,7 @@ namespace gin {
 template <>
 struct Converter<electron::TaskbarHost::ThumbarButton> {
   static bool FromV8(v8::Isolate* isolate,
-                     v8::Handle<v8::Value> val,
+                     v8::Local<v8::Value> val,
                      electron::TaskbarHost::ThumbarButton* out) {
     gin::Dictionary dict(isolate);
     if (!gin::ConvertFromV8(isolate, val, &dict))
@@ -58,9 +67,7 @@ struct Converter<electron::TaskbarHost::ThumbarButton> {
 }  // namespace gin
 #endif
 
-namespace electron {
-
-namespace api {
+namespace electron::api {
 
 namespace {
 
@@ -82,7 +89,6 @@ BaseWindow::BaseWindow(v8::Isolate* isolate,
   if (options.Get("parent", &parent) && !parent.IsEmpty())
     parent_window_.Reset(isolate, parent.ToV8());
 
-#if BUILDFLAG(ENABLE_OSR)
   // Offscreen windows are always created frameless.
   gin_helper::Dictionary web_preferences;
   bool offscreen;
@@ -90,12 +96,13 @@ BaseWindow::BaseWindow(v8::Isolate* isolate,
       web_preferences.Get(options::kOffscreen, &offscreen) && offscreen) {
     const_cast<gin_helper::Dictionary&>(options).Set(options::kFrame, false);
   }
-#endif
 
   // Creates NativeWindow.
-  window_.reset(NativeWindow::Create(
-      options, parent.IsEmpty() ? nullptr : parent->window_.get()));
+  window_ = NativeWindow::Create(
+      options, parent.IsEmpty() ? nullptr : parent->window_.get());
   window_->AddObserver(this);
+
+  SetContentView(View::Create(isolate));
 
 #if defined(TOOLKIT_VIEWS)
   v8::Local<v8::Value> icon;
@@ -118,7 +125,8 @@ BaseWindow::~BaseWindow() {
 
   // Destroy the native window in next tick because the native code might be
   // iterating all windows.
-  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, window_.release());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
+      FROM_HERE, window_.release());
 
   // Remove global reference so the JS object can be garbage collected.
   self_ref_.Reset();
@@ -163,14 +171,43 @@ void BaseWindow::OnWindowClosed() {
   Emit("closed");
 
   RemoveFromParentChildWindows();
-  BaseWindow::ResetBrowserViews();
 
   // Destroy the native class when window is closed.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, GetDestroyClosure());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, GetDestroyClosure());
 }
 
-void BaseWindow::OnWindowEndSession() {
-  Emit("session-end");
+void BaseWindow::OnWindowQueryEndSession(
+    const std::vector<std::string>& reasons,
+    bool* prevent_default) {
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope handle_scope(isolate);
+
+  gin::Handle<gin_helper::internal::Event> event =
+      gin_helper::internal::Event::New(isolate);
+  v8::Local<v8::Object> event_object = event.ToV8().As<v8::Object>();
+
+  gin::Dictionary dict(isolate, event_object);
+  dict.Set("reasons", reasons);
+
+  EmitWithoutEvent("query-session-end", event);
+  if (event->GetDefaultPrevented()) {
+    *prevent_default = true;
+  }
+}
+
+void BaseWindow::OnWindowEndSession(const std::vector<std::string>& reasons) {
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope handle_scope(isolate);
+
+  gin::Handle<gin_helper::internal::Event> event =
+      gin_helper::internal::Event::New(isolate);
+  v8::Local<v8::Object> event_object = event.ToV8().As<v8::Object>();
+
+  gin::Dictionary dict(isolate, event_object);
+  dict.Set("reasons", reasons);
+
+  EmitWithoutEvent("session-end", event);
 }
 
 void BaseWindow::OnWindowBlur() {
@@ -209,9 +246,8 @@ void BaseWindow::OnWindowWillResize(const gfx::Rect& new_bounds,
                                     const gfx::ResizeEdge& edge,
                                     bool* prevent_default) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-  v8::Locker locker(isolate);
   v8::HandleScope handle_scope(isolate);
-  gin_helper::Dictionary info = gin::Dictionary::CreateEmpty(isolate);
+  auto info = gin::Dictionary::CreateEmpty(isolate);
   info.Set("edge", edge);
 
   if (Emit("will-resize", new_bounds, info)) {
@@ -250,14 +286,6 @@ void BaseWindow::OnWindowLeaveFullScreen() {
   Emit("leave-full-screen");
 }
 
-void BaseWindow::OnWindowScrollTouchBegin() {
-  Emit("scroll-touch-begin");
-}
-
-void BaseWindow::OnWindowScrollTouchEnd() {
-  Emit("scroll-touch-end");
-}
-
 void BaseWindow::OnWindowSwipe(const std::string& direction) {
   Emit("swipe", direction);
 }
@@ -286,12 +314,12 @@ void BaseWindow::OnWindowAlwaysOnTopChanged() {
   Emit("always-on-top-changed", IsAlwaysOnTop());
 }
 
-void BaseWindow::OnExecuteAppCommand(const std::string& command_name) {
+void BaseWindow::OnExecuteAppCommand(const std::string_view command_name) {
   Emit("app-command", command_name);
 }
 
 void BaseWindow::OnTouchBarItemResult(const std::string& item_id,
-                                      const base::DictionaryValue& details) {
+                                      const base::Value::Dict& details) {
   Emit("-touch-bar-interaction", item_id, details);
 }
 
@@ -309,7 +337,6 @@ void BaseWindow::OnSystemContextMenu(int x, int y, bool* prevent_default) {
 void BaseWindow::OnWindowMessage(UINT message, WPARAM w_param, LPARAM l_param) {
   if (IsWindowMessageHooked(message)) {
     v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-    v8::Locker locker(isolate);
     v8::HandleScope scope(isolate);
     messages_callback_map_[message].Run(
         ToBuffer(isolate, static_cast<void*>(&w_param), sizeof(WPARAM)),
@@ -319,8 +346,7 @@ void BaseWindow::OnWindowMessage(UINT message, WPARAM w_param, LPARAM l_param) {
 #endif
 
 void BaseWindow::SetContentView(gin::Handle<View> view) {
-  ResetBrowserViews();
-  content_view_.Reset(isolate(), view.ToV8());
+  content_view_.Reset(JavascriptEnvironment::GetIsolate(), view.ToV8());
   window_->SetContentView(view->view());
 }
 
@@ -341,7 +367,7 @@ void BaseWindow::Blur() {
   window_->Focus(false);
 }
 
-bool BaseWindow::IsFocused() {
+bool BaseWindow::IsFocused() const {
   return window_->IsFocused();
 }
 
@@ -360,11 +386,11 @@ void BaseWindow::Hide() {
   window_->Hide();
 }
 
-bool BaseWindow::IsVisible() {
+bool BaseWindow::IsVisible() const {
   return window_->IsVisible();
 }
 
-bool BaseWindow::IsEnabled() {
+bool BaseWindow::IsEnabled() const {
   return window_->IsEnabled();
 }
 
@@ -380,7 +406,7 @@ void BaseWindow::Unmaximize() {
   window_->Unmaximize();
 }
 
-bool BaseWindow::IsMaximized() {
+bool BaseWindow::IsMaximized() const {
   return window_->IsMaximized();
 }
 
@@ -392,7 +418,7 @@ void BaseWindow::Restore() {
   window_->Restore();
 }
 
-bool BaseWindow::IsMinimized() {
+bool BaseWindow::IsMinimized() const {
   return window_->IsMinimized();
 }
 
@@ -400,7 +426,7 @@ void BaseWindow::SetFullScreen(bool fullscreen) {
   window_->SetFullScreen(fullscreen);
 }
 
-bool BaseWindow::IsFullscreen() {
+bool BaseWindow::IsFullscreen() const {
   return window_->IsFullscreen();
 }
 
@@ -411,15 +437,15 @@ void BaseWindow::SetBounds(const gfx::Rect& bounds,
   window_->SetBounds(bounds, animate);
 }
 
-gfx::Rect BaseWindow::GetBounds() {
+gfx::Rect BaseWindow::GetBounds() const {
   return window_->GetBounds();
 }
 
-bool BaseWindow::IsNormal() {
+bool BaseWindow::IsNormal() const {
   return window_->IsNormal();
 }
 
-gfx::Rect BaseWindow::GetNormalBounds() {
+gfx::Rect BaseWindow::GetNormalBounds() const {
   return window_->GetNormalBounds();
 }
 
@@ -430,7 +456,7 @@ void BaseWindow::SetContentBounds(const gfx::Rect& bounds,
   window_->SetContentBounds(bounds, animate);
 }
 
-gfx::Rect BaseWindow::GetContentBounds() {
+gfx::Rect BaseWindow::GetContentBounds() const {
   return window_->GetContentBounds();
 }
 
@@ -442,7 +468,7 @@ void BaseWindow::SetSize(int width, int height, gin_helper::Arguments* args) {
   window_->SetSize(size, animate);
 }
 
-std::vector<int> BaseWindow::GetSize() {
+std::vector<int> BaseWindow::GetSize() const {
   std::vector<int> result(2);
   gfx::Size size = window_->GetSize();
   result[0] = size.width();
@@ -458,7 +484,7 @@ void BaseWindow::SetContentSize(int width,
   window_->SetContentSize(gfx::Size(width, height), animate);
 }
 
-std::vector<int> BaseWindow::GetContentSize() {
+std::vector<int> BaseWindow::GetContentSize() const {
   std::vector<int> result(2);
   gfx::Size size = window_->GetContentSize();
   result[0] = size.width();
@@ -470,7 +496,7 @@ void BaseWindow::SetMinimumSize(int width, int height) {
   window_->SetMinimumSize(gfx::Size(width, height));
 }
 
-std::vector<int> BaseWindow::GetMinimumSize() {
+std::vector<int> BaseWindow::GetMinimumSize() const {
   std::vector<int> result(2);
   gfx::Size size = window_->GetMinimumSize();
   result[0] = size.width();
@@ -482,7 +508,7 @@ void BaseWindow::SetMaximumSize(int width, int height) {
   window_->SetMaximumSize(gfx::Size(width, height));
 }
 
-std::vector<int> BaseWindow::GetMaximumSize() {
+std::vector<int> BaseWindow::GetMaximumSize() const {
   std::vector<int> result(2);
   gfx::Size size = window_->GetMaximumSize();
   result[0] = size.width();
@@ -500,7 +526,7 @@ void BaseWindow::SetResizable(bool resizable) {
   window_->SetResizable(resizable);
 }
 
-bool BaseWindow::IsResizable() {
+bool BaseWindow::IsResizable() const {
   return window_->IsResizable();
 }
 
@@ -508,7 +534,7 @@ void BaseWindow::SetMovable(bool movable) {
   window_->SetMovable(movable);
 }
 
-bool BaseWindow::IsMovable() {
+bool BaseWindow::IsMovable() const {
   return window_->IsMovable();
 }
 
@@ -516,7 +542,7 @@ void BaseWindow::SetMinimizable(bool minimizable) {
   window_->SetMinimizable(minimizable);
 }
 
-bool BaseWindow::IsMinimizable() {
+bool BaseWindow::IsMinimizable() const {
   return window_->IsMinimizable();
 }
 
@@ -524,7 +550,7 @@ void BaseWindow::SetMaximizable(bool maximizable) {
   window_->SetMaximizable(maximizable);
 }
 
-bool BaseWindow::IsMaximizable() {
+bool BaseWindow::IsMaximizable() const {
   return window_->IsMaximizable();
 }
 
@@ -532,7 +558,7 @@ void BaseWindow::SetFullScreenable(bool fullscreenable) {
   window_->SetFullScreenable(fullscreenable);
 }
 
-bool BaseWindow::IsFullScreenable() {
+bool BaseWindow::IsFullScreenable() const {
   return window_->IsFullScreenable();
 }
 
@@ -540,7 +566,7 @@ void BaseWindow::SetClosable(bool closable) {
   window_->SetClosable(closable);
 }
 
-bool BaseWindow::IsClosable() {
+bool BaseWindow::IsClosable() const {
   return window_->IsClosable();
 }
 
@@ -555,7 +581,7 @@ void BaseWindow::SetAlwaysOnTop(bool top, gin_helper::Arguments* args) {
   window_->SetAlwaysOnTop(z_order, level, relative_level);
 }
 
-bool BaseWindow::IsAlwaysOnTop() {
+bool BaseWindow::IsAlwaysOnTop() const {
   return window_->GetZOrderLevel() != ui::ZOrderLevel::kNormal;
 }
 
@@ -569,7 +595,7 @@ void BaseWindow::SetPosition(int x, int y, gin_helper::Arguments* args) {
   window_->SetPosition(gfx::Point(x, y), animate);
 }
 
-std::vector<int> BaseWindow::GetPosition() {
+std::vector<int> BaseWindow::GetPosition() const {
   std::vector<int> result(2);
   gfx::Point pos = window_->GetPosition();
   result[0] = pos.x();
@@ -578,12 +604,8 @@ std::vector<int> BaseWindow::GetPosition() {
 }
 void BaseWindow::MoveAbove(const std::string& sourceId,
                            gin_helper::Arguments* args) {
-#if BUILDFLAG(ENABLE_DESKTOP_CAPTURER)
   if (!window_->MoveAbove(sourceId))
     args->ThrowError("Invalid media source id");
-#else
-  args->ThrowError("enable_desktop_capturer=true to use this feature");
-#endif
 }
 
 void BaseWindow::MoveTop() {
@@ -594,7 +616,7 @@ void BaseWindow::SetTitle(const std::string& title) {
   window_->SetTitle(title);
 }
 
-std::string BaseWindow::GetTitle() {
+std::string BaseWindow::GetTitle() const {
   return window_->GetTitle();
 }
 
@@ -602,7 +624,7 @@ void BaseWindow::SetAccessibleTitle(const std::string& title) {
   window_->SetAccessibleTitle(title);
 }
 
-std::string BaseWindow::GetAccessibleTitle() {
+std::string BaseWindow::GetAccessibleTitle() const {
   return window_->GetAccessibleTitle();
 }
 
@@ -618,7 +640,7 @@ void BaseWindow::SetExcludedFromShownWindowsMenu(bool excluded) {
   window_->SetExcludedFromShownWindowsMenu(excluded);
 }
 
-bool BaseWindow::IsExcludedFromShownWindowsMenu() {
+bool BaseWindow::IsExcludedFromShownWindowsMenu() const {
   return window_->IsExcludedFromShownWindowsMenu();
 }
 
@@ -626,7 +648,7 @@ void BaseWindow::SetSimpleFullScreen(bool simple_fullscreen) {
   window_->SetSimpleFullScreen(simple_fullscreen);
 }
 
-bool BaseWindow::IsSimpleFullScreen() {
+bool BaseWindow::IsSimpleFullScreen() const {
   return window_->IsSimpleFullScreen();
 }
 
@@ -634,7 +656,7 @@ void BaseWindow::SetKiosk(bool kiosk) {
   window_->SetKiosk(kiosk);
 }
 
-bool BaseWindow::IsKiosk() {
+bool BaseWindow::IsKiosk() const {
   return window_->IsKiosk();
 }
 
@@ -647,15 +669,19 @@ void BaseWindow::SetBackgroundColor(const std::string& color_name) {
   window_->SetBackgroundColor(color);
 }
 
-std::string BaseWindow::GetBackgroundColor(gin_helper::Arguments* args) {
+std::string BaseWindow::GetBackgroundColor() const {
   return ToRGBHex(window_->GetBackgroundColor());
+}
+
+void BaseWindow::InvalidateShadow() {
+  window_->InvalidateShadow();
 }
 
 void BaseWindow::SetHasShadow(bool has_shadow) {
   window_->SetHasShadow(has_shadow);
 }
 
-bool BaseWindow::HasShadow() {
+bool BaseWindow::HasShadow() const {
   return window_->HasShadow();
 }
 
@@ -663,7 +689,7 @@ void BaseWindow::SetOpacity(const double opacity) {
   window_->SetOpacity(opacity);
 }
 
-double BaseWindow::GetOpacity() {
+double BaseWindow::GetOpacity() const {
   return window_->GetOpacity();
 }
 
@@ -675,7 +701,7 @@ void BaseWindow::SetRepresentedFilename(const std::string& filename) {
   window_->SetRepresentedFilename(filename);
 }
 
-std::string BaseWindow::GetRepresentedFilename() {
+std::string BaseWindow::GetRepresentedFilename() const {
   return window_->GetRepresentedFilename();
 }
 
@@ -683,7 +709,7 @@ void BaseWindow::SetDocumentEdited(bool edited) {
   window_->SetDocumentEdited(edited);
 }
 
-bool BaseWindow::IsDocumentEdited() {
+bool BaseWindow::IsDocumentEdited() const {
   return window_->IsDocumentEdited();
 }
 
@@ -703,7 +729,7 @@ void BaseWindow::SetFocusable(bool focusable) {
   return window_->SetFocusable(focusable);
 }
 
-bool BaseWindow::IsFocusable() {
+bool BaseWindow::IsFocusable() const {
   return window_->IsFocusable();
 }
 
@@ -713,8 +739,6 @@ void BaseWindow::SetMenu(v8::Isolate* isolate, v8::Local<v8::Value> value) {
   v8::Local<v8::Object> object;
   if (value->IsObject() && value->ToObject(context).ToLocal(&object) &&
       gin::ConvertFromV8(isolate, value, &menu) && !menu.IsEmpty()) {
-    menu_.Reset(isolate, menu.ToV8());
-
     // We only want to update the menu if the menu has a non-zero item count,
     // or we risk crashes.
     if (menu->model()->GetItemCount() == 0) {
@@ -722,6 +746,8 @@ void BaseWindow::SetMenu(v8::Isolate* isolate, v8::Local<v8::Value> value) {
     } else {
       window_->SetMenu(menu->model());
     }
+
+    menu_.Reset(isolate, menu.ToV8());
   } else if (value->IsNull()) {
     RemoveMenu();
   } else {
@@ -754,63 +780,6 @@ void BaseWindow::SetParentWindow(v8::Local<v8::Value> value,
     parent->child_windows_.Set(isolate(), weak_map_id(), GetWrapper());
   } else {
     args->ThrowError("Must pass BaseWindow instance or null");
-  }
-}
-
-void BaseWindow::SetBrowserView(v8::Local<v8::Value> value) {
-  ResetBrowserViews();
-  AddBrowserView(value);
-}
-
-void BaseWindow::AddBrowserView(v8::Local<v8::Value> value) {
-  gin::Handle<BrowserView> browser_view;
-  if (value->IsObject() &&
-      gin::ConvertFromV8(isolate(), value, &browser_view)) {
-    auto get_that_view = browser_views_.find(browser_view->ID());
-    if (get_that_view == browser_views_.end()) {
-      // If we're reparenting a BrowserView, ensure that it's detached from
-      // its previous owner window.
-      auto* owner_window = browser_view->owner_window();
-      if (owner_window && owner_window != window_.get()) {
-        owner_window->RemoveBrowserView(browser_view->view());
-        browser_view->SetOwnerWindow(nullptr);
-      }
-
-      window_->AddBrowserView(browser_view->view());
-      browser_view->SetOwnerWindow(window_.get());
-      browser_views_[browser_view->ID()].Reset(isolate(), value);
-    }
-  }
-}
-
-void BaseWindow::RemoveBrowserView(v8::Local<v8::Value> value) {
-  gin::Handle<BrowserView> browser_view;
-  if (value->IsObject() &&
-      gin::ConvertFromV8(isolate(), value, &browser_view)) {
-    auto get_that_view = browser_views_.find(browser_view->ID());
-    if (get_that_view != browser_views_.end()) {
-      window_->RemoveBrowserView(browser_view->view());
-      browser_view->SetOwnerWindow(nullptr);
-      (*get_that_view).second.Reset(isolate(), value);
-      browser_views_.erase(get_that_view);
-    }
-  }
-}
-
-void BaseWindow::SetTopBrowserView(v8::Local<v8::Value> value,
-                                   gin_helper::Arguments* args) {
-  gin::Handle<BrowserView> browser_view;
-  if (value->IsObject() &&
-      gin::ConvertFromV8(isolate(), value, &browser_view)) {
-    auto* owner_window = browser_view->owner_window();
-    auto get_that_view = browser_views_.find(browser_view->ID());
-    if (get_that_view == browser_views_.end() ||
-        (owner_window && owner_window != window_.get())) {
-      args->ThrowError("Given BrowserView is not attached to the window");
-      return;
-    }
-
-    window_->SetTopBrowserView(browser_view->view());
   }
 }
 
@@ -862,7 +831,7 @@ void BaseWindow::SetVisibleOnAllWorkspaces(bool visible,
                                             skipTransformProcessType);
 }
 
-bool BaseWindow::IsVisibleOnAllWorkspaces() {
+bool BaseWindow::IsVisibleOnAllWorkspaces() const {
   return window_->IsVisibleOnAllWorkspaces();
 }
 
@@ -870,13 +839,26 @@ void BaseWindow::SetAutoHideCursor(bool auto_hide) {
   window_->SetAutoHideCursor(auto_hide);
 }
 
-void BaseWindow::SetVibrancy(v8::Isolate* isolate, v8::Local<v8::Value> value) {
+void BaseWindow::SetVibrancy(v8::Isolate* isolate,
+                             v8::Local<v8::Value> value,
+                             gin_helper::Arguments* args) {
   std::string type = gin::V8ToString(isolate, value);
-  window_->SetVibrancy(type);
+  gin_helper::Dictionary options;
+  int animation_duration_ms = 0;
+
+  if (args->GetNext(&options)) {
+    options.Get("animationDuration", &animation_duration_ms);
+  }
+
+  window_->SetVibrancy(type, animation_duration_ms);
+}
+
+void BaseWindow::SetBackgroundMaterial(const std::string& material_type) {
+  window_->SetBackgroundMaterial(material_type);
 }
 
 #if BUILDFLAG(IS_MAC)
-std::string BaseWindow::GetAlwaysOnTopLevel() {
+std::string BaseWindow::GetAlwaysOnTopLevel() const {
   return window_->GetAlwaysOnTopLevel();
 }
 
@@ -888,17 +870,22 @@ bool BaseWindow::GetWindowButtonVisibility() const {
   return window_->GetWindowButtonVisibility();
 }
 
-void BaseWindow::SetTrafficLightPosition(const gfx::Point& position) {
-  // For backward compatibility we treat (0, 0) as resetting to default.
-  if (position.IsOrigin())
-    window_->SetTrafficLightPosition(absl::nullopt);
-  else
-    window_->SetTrafficLightPosition(position);
+void BaseWindow::SetWindowButtonPosition(std::optional<gfx::Point> position) {
+  window_->SetWindowButtonPosition(std::move(position));
 }
 
-gfx::Point BaseWindow::GetTrafficLightPosition() const {
-  // For backward compatibility we treat default value as (0, 0).
-  return window_->GetTrafficLightPosition().value_or(gfx::Point());
+std::optional<gfx::Point> BaseWindow::GetWindowButtonPosition() const {
+  return window_->GetWindowButtonPosition();
+}
+#endif
+
+#if BUILDFLAG(IS_MAC)
+bool BaseWindow::IsHiddenInMissionControl() {
+  return window_->IsHiddenInMissionControl();
+}
+
+void BaseWindow::SetHiddenInMissionControl(bool hidden) {
+  window_->SetHiddenInMissionControl(hidden);
 }
 #endif
 
@@ -923,6 +910,10 @@ void BaseWindow::SelectNextTab() {
   window_->SelectNextTab();
 }
 
+void BaseWindow::ShowAllTabs() {
+  window_->ShowAllTabs();
+}
+
 void BaseWindow::MergeAllWindows() {
   window_->MergeAllWindows();
 }
@@ -941,11 +932,19 @@ void BaseWindow::AddTabbedWindow(NativeWindow* window,
     args->ThrowError("AddTabbedWindow cannot be called by a window on itself.");
 }
 
+v8::Local<v8::Value> BaseWindow::GetTabbingIdentifier() {
+  auto tabbing_id = window_->GetTabbingIdentifier();
+  if (!tabbing_id.has_value())
+    return v8::Undefined(isolate());
+
+  return gin::ConvertToV8(isolate(), tabbing_id.value());
+}
+
 void BaseWindow::SetAutoHideMenuBar(bool auto_hide) {
   window_->SetAutoHideMenuBar(auto_hide);
 }
 
-bool BaseWindow::IsMenuBarAutoHide() {
+bool BaseWindow::IsMenuBarAutoHide() const {
   return window_->IsMenuBarAutoHide();
 }
 
@@ -953,7 +952,7 @@ void BaseWindow::SetMenuBarVisibility(bool visible) {
   window_->SetMenuBarVisibility(visible);
 }
 
-bool BaseWindow::IsMenuBarVisible() {
+bool BaseWindow::IsMenuBarVisible() const {
   return window_->IsMenuBarVisible();
 }
 
@@ -996,31 +995,6 @@ v8::Local<v8::Value> BaseWindow::GetParentWindow() const {
 
 std::vector<v8::Local<v8::Object>> BaseWindow::GetChildWindows() const {
   return child_windows_.Values(isolate());
-}
-
-v8::Local<v8::Value> BaseWindow::GetBrowserView(
-    gin_helper::Arguments* args) const {
-  if (browser_views_.empty()) {
-    return v8::Null(isolate());
-  } else if (browser_views_.size() == 1) {
-    auto first_view = browser_views_.begin();
-    return v8::Local<v8::Value>::New(isolate(), (*first_view).second);
-  } else {
-    args->ThrowError(
-        "BrowserWindow have multiple BrowserViews, "
-        "Use getBrowserViews() instead");
-    return v8::Null(isolate());
-  }
-}
-
-std::vector<v8::Local<v8::Value>> BaseWindow::GetBrowserViews() const {
-  std::vector<v8::Local<v8::Value>> ret;
-
-  for (auto const& views_iter : browser_views_) {
-    ret.push_back(v8::Local<v8::Value>::New(isolate(), views_iter.second));
-  }
-
-  return ret;
 }
 
 bool BaseWindow::IsModal() const {
@@ -1116,32 +1090,72 @@ void BaseWindow::SetAppDetails(const gin_helper::Dictionary& options) {
 }
 #endif
 
-int32_t BaseWindow::GetID() const {
-  return weak_map_id();
-}
-
-void BaseWindow::ResetBrowserViews() {
-  v8::HandleScope scope(isolate());
-
-  for (auto& item : browser_views_) {
-    gin::Handle<BrowserView> browser_view;
-    if (gin::ConvertFromV8(isolate(),
-                           v8::Local<v8::Value>::New(isolate(), item.second),
-                           &browser_view) &&
-        !browser_view.IsEmpty()) {
-      // There's a chance that the BrowserView may have been reparented - only
-      // reset if the owner window is *this* window.
-      auto* owner_window = browser_view->owner_window();
-      if (owner_window && owner_window == window_.get()) {
-        browser_view->SetOwnerWindow(nullptr);
-        owner_window->RemoveBrowserView(browser_view->view());
-      }
-    }
-
-    item.second.Reset();
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+void BaseWindow::SetTitleBarOverlay(const gin_helper::Dictionary& options,
+                                    gin_helper::Arguments* args) {
+  // Ensure WCO is already enabled on this window
+  if (!window_->IsWindowControlsOverlayEnabled()) {
+    args->ThrowError("Titlebar overlay is not enabled");
+    return;
   }
 
-  browser_views_.clear();
+  auto* window = static_cast<NativeWindowViews*>(window_.get());
+  bool updated = false;
+
+  // Check and update the button color
+  std::string btn_color;
+  if (options.Get(options::kOverlayButtonColor, &btn_color)) {
+    // Parse the string as a CSS color
+    SkColor color;
+    if (!content::ParseCssColorString(btn_color, &color)) {
+      args->ThrowError("Could not parse color as CSS color");
+      return;
+    }
+
+    // Update the view
+    window->set_overlay_button_color(color);
+    updated = true;
+  }
+
+  // Check and update the symbol color
+  std::string symbol_color;
+  if (options.Get(options::kOverlaySymbolColor, &symbol_color)) {
+    // Parse the string as a CSS color
+    SkColor color;
+    if (!content::ParseCssColorString(symbol_color, &color)) {
+      args->ThrowError("Could not parse symbol color as CSS color");
+      return;
+    }
+
+    // Update the view
+    window->set_overlay_symbol_color(color);
+    updated = true;
+  }
+
+  // Check and update the height
+  int height = 0;
+  if (options.Get(options::kOverlayHeight, &height)) {
+    window->set_titlebar_overlay_height(height);
+    updated = true;
+  }
+
+  if (!updated)
+    return;
+
+    // If anything was updated, ensure the overlay is repainted.
+#if BUILDFLAG(IS_WIN)
+  auto* frame_view = static_cast<WinFrameView*>(
+      window->widget()->non_client_view()->frame_view());
+#else
+  auto* frame_view = static_cast<OpaqueFrameView*>(
+      window->widget()->non_client_view()->frame_view());
+#endif
+  frame_view->InvalidateCaptionButtons();
+}
+#endif
+
+int32_t BaseWindow::GetID() const {
+  return weak_map_id();
 }
 
 void BaseWindow::RemoveFromParentChildWindows() {
@@ -1159,8 +1173,7 @@ void BaseWindow::RemoveFromParentChildWindows() {
 
 // static
 gin_helper::WrappableBase* BaseWindow::New(gin_helper::Arguments* args) {
-  gin_helper::Dictionary options =
-      gin::Dictionary::CreateEmpty(args->isolate());
+  auto options = gin_helper::Dictionary::CreateEmpty(args->isolate());
   args->GetNext(&options);
 
   return new BaseWindow(args, options);
@@ -1254,10 +1267,6 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("setMenu", &BaseWindow::SetMenu)
       .SetMethod("removeMenu", &BaseWindow::RemoveMenu)
       .SetMethod("setParentWindow", &BaseWindow::SetParentWindow)
-      .SetMethod("setBrowserView", &BaseWindow::SetBrowserView)
-      .SetMethod("addBrowserView", &BaseWindow::AddBrowserView)
-      .SetMethod("removeBrowserView", &BaseWindow::RemoveBrowserView)
-      .SetMethod("setTopBrowserView", &BaseWindow::SetTopBrowserView)
       .SetMethod("getMediaSourceId", &BaseWindow::GetMediaSourceId)
       .SetMethod("getNativeWindowHandle", &BaseWindow::GetNativeWindowHandle)
       .SetMethod("setProgressBar", &BaseWindow::SetProgressBar)
@@ -1267,15 +1276,18 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("isVisibleOnAllWorkspaces",
                  &BaseWindow::IsVisibleOnAllWorkspaces)
 #if BUILDFLAG(IS_MAC)
+      .SetMethod("invalidateShadow", &BaseWindow::InvalidateShadow)
       .SetMethod("_getAlwaysOnTopLevel", &BaseWindow::GetAlwaysOnTopLevel)
       .SetMethod("setAutoHideCursor", &BaseWindow::SetAutoHideCursor)
 #endif
       .SetMethod("setVibrancy", &BaseWindow::SetVibrancy)
+      .SetMethod("setBackgroundMaterial", &BaseWindow::SetBackgroundMaterial)
+
 #if BUILDFLAG(IS_MAC)
-      .SetMethod("setTrafficLightPosition",
-                 &BaseWindow::SetTrafficLightPosition)
-      .SetMethod("getTrafficLightPosition",
-                 &BaseWindow::GetTrafficLightPosition)
+      .SetMethod("isHiddenInMissionControl",
+                 &BaseWindow::IsHiddenInMissionControl)
+      .SetMethod("setHiddenInMissionControl",
+                 &BaseWindow::SetHiddenInMissionControl)
 #endif
       .SetMethod("_setTouchBarItems", &BaseWindow::SetTouchBar)
       .SetMethod("_refreshTouchBarItem", &BaseWindow::RefreshTouchBarItem)
@@ -1283,14 +1295,20 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
 #if BUILDFLAG(IS_MAC)
       .SetMethod("selectPreviousTab", &BaseWindow::SelectPreviousTab)
       .SetMethod("selectNextTab", &BaseWindow::SelectNextTab)
+      .SetMethod("showAllTabs", &BaseWindow::ShowAllTabs)
       .SetMethod("mergeAllWindows", &BaseWindow::MergeAllWindows)
       .SetMethod("moveTabToNewWindow", &BaseWindow::MoveTabToNewWindow)
       .SetMethod("toggleTabBar", &BaseWindow::ToggleTabBar)
       .SetMethod("addTabbedWindow", &BaseWindow::AddTabbedWindow)
+      .SetProperty("tabbingIdentifier", &BaseWindow::GetTabbingIdentifier)
       .SetMethod("setWindowButtonVisibility",
                  &BaseWindow::SetWindowButtonVisibility)
       .SetMethod("_getWindowButtonVisibility",
                  &BaseWindow::GetWindowButtonVisibility)
+      .SetMethod("setWindowButtonPosition",
+                 &BaseWindow::SetWindowButtonPosition)
+      .SetMethod("getWindowButtonPosition",
+                 &BaseWindow::GetWindowButtonPosition)
       .SetProperty("excludedFromShownWindowsMenu",
                    &BaseWindow::IsExcludedFromShownWindowsMenu,
                    &BaseWindow::SetExcludedFromShownWindowsMenu)
@@ -1303,10 +1321,10 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("previewFile", &BaseWindow::PreviewFile)
       .SetMethod("closeFilePreview", &BaseWindow::CloseFilePreview)
       .SetMethod("getContentView", &BaseWindow::GetContentView)
+      .SetProperty("contentView", &BaseWindow::GetContentView,
+                   &BaseWindow::SetContentView)
       .SetMethod("getParentWindow", &BaseWindow::GetParentWindow)
       .SetMethod("getChildWindows", &BaseWindow::GetChildWindows)
-      .SetMethod("getBrowserView", &BaseWindow::GetBrowserView)
-      .SetMethod("getBrowserViews", &BaseWindow::GetBrowserViews)
       .SetMethod("isModal", &BaseWindow::IsModal)
       .SetMethod("setThumbarButtons", &BaseWindow::SetThumbarButtons)
 #if defined(TOOLKIT_VIEWS)
@@ -1322,12 +1340,13 @@ void BaseWindow::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("setThumbnailToolTip", &BaseWindow::SetThumbnailToolTip)
       .SetMethod("setAppDetails", &BaseWindow::SetAppDetails)
 #endif
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+      .SetMethod("setTitleBarOverlay", &BaseWindow::SetTitleBarOverlay)
+#endif
       .SetProperty("id", &BaseWindow::GetID);
 }
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api
 
 namespace {
 
@@ -1353,4 +1372,4 @@ void Initialize(v8::Local<v8::Object> exports,
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_base_window, Initialize)
+NODE_LINKED_BINDING_CONTEXT_AWARE(electron_browser_base_window, Initialize)

@@ -6,15 +6,13 @@
 #define ELECTRON_SHELL_RENDERER_API_ELECTRON_API_CONTEXT_BRIDGE_H_
 
 #include "shell/renderer/api/context_bridge/object_cache.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-forward.h"
 
 namespace gin_helper {
 class Arguments;
 }
 
-namespace electron {
-
-namespace api {
+namespace electron::api {
 
 void ProxyFunctionWrapper(const v8::FunctionCallbackInfo<v8::Value>& info);
 
@@ -38,10 +36,18 @@ v8::MaybeLocal<v8::Value> PassValueToOtherContext(
     v8::Local<v8::Context> source_context,
     v8::Local<v8::Context> destination_context,
     v8::Local<v8::Value> value,
+    /**
+     * Used to automatically bind a function across
+     * worlds to its appropriate default "this" value.
+     *
+     * If this value is the root of a tree going over
+     * the bridge set this to the "context" of the value.
+     */
+    v8::Local<v8::Value> parent_value,
     context_bridge::ObjectCache* object_cache,
     bool support_dynamic_properties,
     int recursion_depth,
-    BridgeErrorTarget error_target = BridgeErrorTarget::kSource);
+    BridgeErrorTarget error_target);
 
 v8::MaybeLocal<v8::Object> CreateProxyForAPI(
     const v8::Local<v8::Object>& api_object,
@@ -49,10 +55,9 @@ v8::MaybeLocal<v8::Object> CreateProxyForAPI(
     const v8::Local<v8::Context>& destination_context,
     context_bridge::ObjectCache* object_cache,
     bool support_dynamic_properties,
-    int recursion_depth);
+    int recursion_depth,
+    BridgeErrorTarget error_target);
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api
 
 #endif  // ELECTRON_SHELL_RENDERER_API_ELECTRON_API_CONTEXT_BRIDGE_H_

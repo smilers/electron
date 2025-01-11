@@ -9,15 +9,13 @@
 #include <sys/prctl.h>
 #include <sys/signalfd.h>
 
-#include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
+#include "base/posix/eintr_wrapper.h"
 #include "base/process/launch.h"
 #include "base/synchronization/waitable_event.h"
 
-namespace relauncher {
-
-namespace internal {
+namespace relauncher::internal {
 
 // this is global to be visible to the sa_handler
 base::WaitableEvent parentWaiter;
@@ -68,6 +66,4 @@ int LaunchProgram(const StringVector& relauncher_args,
   return process.IsValid() ? 0 : 1;
 }
 
-}  // namespace internal
-
-}  // namespace relauncher
+}  // namespace relauncher::internal

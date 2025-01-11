@@ -1,8 +1,10 @@
-import { clipboard } from 'electron/common';
-import * as fs from 'fs';
 import { ipcMainInternal } from '@electron/internal/browser/ipc-main-internal';
 import * as ipcMainUtils from '@electron/internal/browser/ipc-main-internal-utils';
 import { IPC_MESSAGES } from '@electron/internal/common/ipc-messages';
+
+import { clipboard } from 'electron/common';
+
+import * as fs from 'fs';
 
 // Implements window.close()
 ipcMainInternal.on(IPC_MESSAGES.BROWSER_WINDOW_CLOSE, function (event) {
@@ -66,6 +68,10 @@ ipcMainUtils.handleSync(IPC_MESSAGES.BROWSER_SANDBOX_LOAD, async function (event
       execPath: process.helperExecPath
     }
   };
+});
+
+ipcMainUtils.handleSync(IPC_MESSAGES.BROWSER_NONSANDBOX_LOAD, function (event) {
+  return { preloadPaths: event.sender._getPreloadPaths() };
 });
 
 ipcMainInternal.on(IPC_MESSAGES.BROWSER_PRELOAD_ERROR, function (event, preloadPath: string, error: Error) {

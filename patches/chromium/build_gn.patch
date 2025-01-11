@@ -6,15 +6,8 @@ Subject: build_gn.patch
 These are variables we add to the root BUILDCONFIG so that they're available
 everywhere, without having to import("//electron/.../flags.gni").
 
-Additionally, we add the `:mas_build` config to every compiled file so that
-the `MAS_BUILD` #define is available everywhere. This produces fewer patch
-conflicts when upgrading than it would if we added a specific config dependency
-only to those targets which had MAS_BUILD-relevant content in them. The
-tradeoff is that switching from MAS_BUILD to !MAS_BUILD or vice-versa will
-rebuild the entire tree.
-
 diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
-index d960648941d8b959b25f87b364a594ec44760348..74a14a2373305e2e62b974b34a28ea9a62c6a911 100644
+index 9164ee0578686c88fc76ea3c59a7d3e50d15147d..243ac3cc41b095c4a0932c9a48f2db38c941badc 100644
 --- a/build/config/BUILDCONFIG.gn
 +++ b/build/config/BUILDCONFIG.gn
 @@ -123,6 +123,9 @@ if (current_os == "") {
@@ -27,11 +20,3 @@ index d960648941d8b959b25f87b364a594ec44760348..74a14a2373305e2e62b974b34a28ea9a
    # Set to enable the official build level of optimization. This has nothing
    # to do with branding, but enables an additional level of optimization above
    # release (!is_debug). This might be better expressed as a tri-state
-@@ -349,6 +352,7 @@ default_compiler_configs = [
-   "//build/config/compiler/pgo:default_pgo_flags",
-   "//build/config/coverage:default_coverage",
-   "//build/config/sanitizers:default_sanitizer_flags",
-+  "//electron/build/config:mas_build",
- ]
- 
- if (is_win) {

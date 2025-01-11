@@ -12,7 +12,7 @@ shortcuts.
 not have the keyboard focus. This module cannot be used before the `ready`
 event of the app module is emitted.
 
-```javascript
+```js
 const { app, globalShortcut } = require('electron')
 
 app.whenReady().then(() => {
@@ -66,7 +66,7 @@ the app has been authorized as a [trusted accessibility client](https://develope
 
 ### `globalShortcut.registerAll(accelerators, callback)`
 
-* `accelerators` string[] - an array of [Accelerator](accelerator.md)s.
+* `accelerators` [Accelerator](accelerator.md)[] - an array of [Accelerator](accelerator.md)s.
 * `callback` Function
 
 Registers a global shortcut of all `accelerator` items in `accelerators`. The `callback` is called when any of the registered shortcuts are pressed by the user.

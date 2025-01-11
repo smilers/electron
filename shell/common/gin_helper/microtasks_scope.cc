@@ -4,19 +4,19 @@
 
 #include "shell/common/gin_helper/microtasks_scope.h"
 
-#include "shell/common/gin_helper/locker.h"
+#include "shell/common/process_util.h"
 
 namespace gin_helper {
 
 MicrotasksScope::MicrotasksScope(v8::Isolate* isolate,
+                                 v8::MicrotaskQueue* microtask_queue,
                                  bool ignore_browser_checkpoint,
                                  v8::MicrotasksScope::Type scope_type) {
-  if (Locker::IsBrowserProcess()) {
+  if (electron::IsBrowserProcess()) {
     if (!ignore_browser_checkpoint)
       v8::MicrotasksScope::PerformCheckpoint(isolate);
   } else {
-    v8_microtasks_scope_ =
-        std::make_unique<v8::MicrotasksScope>(isolate, scope_type);
+    v8_microtasks_scope_.emplace(isolate, microtask_queue, scope_type);
   }
 }
 

@@ -5,12 +5,11 @@
 
 #include "shell/browser/ui/inspectable_web_contents_view_mac.h"
 
-#import <AppKit/AppKit.h>
-
 #include "base/strings/sys_string_conversions.h"
 #import "shell/browser/ui/cocoa/electron_inspectable_web_contents_view.h"
 #include "shell/browser/ui/inspectable_web_contents.h"
 #include "shell/browser/ui/inspectable_web_contents_view_delegate.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 
 namespace electron {
 
@@ -21,16 +20,23 @@ InspectableWebContentsView* CreateInspectableContentsView(
 
 InspectableWebContentsViewMac::InspectableWebContentsViewMac(
     InspectableWebContents* inspectable_web_contents)
-    : inspectable_web_contents_(inspectable_web_contents),
+    : InspectableWebContentsView(inspectable_web_contents),
       view_([[ElectronInspectableWebContentsView alloc]
           initWithInspectableWebContentsViewMac:this]) {}
 
 InspectableWebContentsViewMac::~InspectableWebContentsViewMac() {
+  [[NSNotificationCenter defaultCenter] removeObserver:view_];
   CloseDevTools();
 }
 
 gfx::NativeView InspectableWebContentsViewMac::GetNativeView() const {
-  return view_.get();
+  return view_;
+}
+
+void InspectableWebContentsViewMac::SetCornerRadii(
+    const gfx::RoundedCornersF& corner_radii) {
+  // We can assume all four values are identical.
+  [view_ setCornerRadii:corner_radii.upper_left()];
 }
 
 void InspectableWebContentsViewMac::ShowDevTools(bool activate) {
@@ -60,6 +66,10 @@ void InspectableWebContentsViewMac::SetContentsResizingStrategy(
 
 void InspectableWebContentsViewMac::SetTitle(const std::u16string& title) {
   [view_ setTitle:base::SysUTF16ToNSString(title)];
+}
+
+const std::u16string InspectableWebContentsViewMac::GetTitle() {
+  return base::SysNSStringToUTF16([view_ getTitle]);
 }
 
 }  // namespace electron

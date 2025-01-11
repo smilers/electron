@@ -8,13 +8,9 @@
 
 #include "shell/browser/ui/inspectable_web_contents_view.h"
 
-#include "base/mac/scoped_nsobject.h"
-
 @class ElectronInspectableWebContentsView;
 
 namespace electron {
-
-class InspectableWebContents;
 
 class InspectableWebContentsViewMac : public InspectableWebContentsView {
  public:
@@ -26,6 +22,7 @@ class InspectableWebContentsViewMac : public InspectableWebContentsView {
   ~InspectableWebContentsViewMac() override;
 
   gfx::NativeView GetNativeView() const override;
+  void SetCornerRadii(const gfx::RoundedCornersF& corner_radii) override;
   void ShowDevTools(bool activate) override;
   void CloseDevTools() override;
   bool IsDevToolsViewShowing() override;
@@ -34,16 +31,10 @@ class InspectableWebContentsViewMac : public InspectableWebContentsView {
   void SetContentsResizingStrategy(
       const DevToolsContentsResizingStrategy& strategy) override;
   void SetTitle(const std::u16string& title) override;
-
-  InspectableWebContents* inspectable_web_contents() {
-    return inspectable_web_contents_;
-  }
+  const std::u16string GetTitle() override;
 
  private:
-  // Owns us.
-  InspectableWebContents* inspectable_web_contents_;
-
-  base::scoped_nsobject<ElectronInspectableWebContentsView> view_;
+  ElectronInspectableWebContentsView* __strong view_;
 };
 
 }  // namespace electron

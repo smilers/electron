@@ -8,39 +8,46 @@
 
 #include "base/logging.h"
 #include "base/process/launch.h"
-#include "base/strings/stringprintf.h"
+#include "base/process/process_handle.h"
+#include "base/strings/strcat_win.h"
+#include "base/strings/string_number_conversions_win.h"
 #include "base/win/scoped_handle.h"
 #include "sandbox/win/src/nt_internals.h"
 #include "sandbox/win/src/win_utils.h"
-#include "ui/base/win/shell.h"
 
-namespace relauncher {
-
-namespace internal {
+namespace relauncher::internal {
 
 namespace {
 
-const CharType* kWaitEventName = L"ElectronRelauncherWaitEvent";
+struct PROCESS_BASIC_INFORMATION {
+  union {
+    NTSTATUS ExitStatus;
+    PVOID padding_for_x64_0;
+  };
+  PPEB PebBaseAddress;
+  KAFFINITY AffinityMask;
+  union {
+    KPRIORITY BasePriority;
+    PVOID padding_for_x64_1;
+  };
+  union {
+    DWORD UniqueProcessId;
+    PVOID padding_for_x64_2;
+  };
+  union {
+    DWORD InheritedFromUniqueProcessId;
+    PVOID padding_for_x64_3;
+  };
+};
 
 HANDLE GetParentProcessHandle(base::ProcessHandle handle) {
-  NtQueryInformationProcessFunction NtQueryInformationProcess = nullptr;
-  ResolveNTFunctionPtr("NtQueryInformationProcess", &NtQueryInformationProcess);
-  if (!NtQueryInformationProcess) {
-    LOG(ERROR) << "Unable to get NtQueryInformationProcess";
-    return NULL;
+  base::ProcessId ppid = base::GetParentProcessId(handle);
+  if (ppid == 0u) {
+    LOG(ERROR) << "Could not get parent process handle";
+    return nullptr;
   }
 
-  PROCESS_BASIC_INFORMATION pbi;
-  LONG status =
-      NtQueryInformationProcess(handle, ProcessBasicInformation, &pbi,
-                                sizeof(PROCESS_BASIC_INFORMATION), NULL);
-  if (!NT_SUCCESS(status)) {
-    LOG(ERROR) << "NtQueryInformationProcess failed";
-    return NULL;
-  }
-
-  return ::OpenProcess(PROCESS_ALL_ACCESS, TRUE,
-                       pbi.InheritedFromUniqueProcessId);
+  return ::OpenProcess(PROCESS_ALL_ACCESS, TRUE, ppid);
 }
 
 StringType AddQuoteForArg(const StringType& arg) {
@@ -89,7 +96,8 @@ StringType AddQuoteForArg(const StringType& arg) {
 }  // namespace
 
 StringType GetWaitEventName(base::ProcessId pid) {
-  return base::StringPrintf(L"%ls-%d", kWaitEventName, static_cast<int>(pid));
+  return base::StrCat({L"ElectronRelauncherWaitEvent-",
+                       base::NumberToWString(static_cast<int>(pid))});
 }
 
 StringType ArgvToCommandLineString(const StringVector& argv) {
@@ -110,7 +118,7 @@ void RelauncherSynchronizeWithParent() {
   // Notify the parent process that it can quit now.
   StringType name = internal::GetWaitEventName(process.Pid());
   base::win::ScopedHandle wait_event(
-      CreateEvent(NULL, TRUE, FALSE, name.c_str()));
+      CreateEvent(nullptr, TRUE, FALSE, name.c_str()));
   ::SetEvent(wait_event.Get());
 
   // Wait for parent process to quit.
@@ -125,6 +133,4 @@ int LaunchProgram(const StringVector& relauncher_args,
   return process.IsValid() ? 0 : 1;
 }
 
-}  // namespace internal
-
-}  // namespace relauncher
+}  // namespace relauncher::internal

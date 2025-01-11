@@ -6,6 +6,7 @@
 #define ELECTRON_SHELL_BROWSER_NATIVE_WINDOW_OBSERVER_H_
 
 #include <string>
+#include <string_view>
 
 #include "base/observer_list_types.h"
 #include "base/values.h"
@@ -26,7 +27,7 @@ namespace electron {
 
 class NativeWindowObserver : public base::CheckedObserver {
  public:
-  ~NativeWindowObserver() override {}
+  ~NativeWindowObserver() override = default;
 
   // Called when the web page in window wants to create a popup window.
   virtual void WillCreatePopupWindow(const std::u16string& frame_name,
@@ -49,8 +50,12 @@ class NativeWindowObserver : public base::CheckedObserver {
   // Called when the window is closed.
   virtual void OnWindowClosed() {}
 
+  // Called when Windows sends WM_QUERYENDSESSION message.
+  virtual void OnWindowQueryEndSession(const std::vector<std::string>& reasons,
+                                       bool* prevent_default) {}
+
   // Called when Windows sends WM_ENDSESSION message
-  virtual void OnWindowEndSession() {}
+  virtual void OnWindowEndSession(const std::vector<std::string>& reasons) {}
 
   // Called when window loses focus.
   virtual void OnWindowBlur() {}
@@ -81,8 +86,6 @@ class NativeWindowObserver : public base::CheckedObserver {
                                 bool* prevent_default) {}
   virtual void OnWindowMove() {}
   virtual void OnWindowMoved() {}
-  virtual void OnWindowScrollTouchBegin() {}
-  virtual void OnWindowScrollTouchEnd() {}
   virtual void OnWindowSwipe(const std::string& direction) {}
   virtual void OnWindowRotateGesture(float rotation) {}
   virtual void OnWindowSheetBegin() {}
@@ -93,7 +96,7 @@ class NativeWindowObserver : public base::CheckedObserver {
   virtual void OnWindowLeaveHtmlFullScreen() {}
   virtual void OnWindowAlwaysOnTopChanged() {}
   virtual void OnTouchBarItemResult(const std::string& item_id,
-                                    const base::DictionaryValue& details) {}
+                                    const base::Value::Dict& details) {}
   virtual void OnNewWindowForTab() {}
   virtual void OnSystemContextMenu(int x, int y, bool* prevent_default) {}
 
@@ -104,7 +107,7 @@ class NativeWindowObserver : public base::CheckedObserver {
 
   // Called on Windows when App Commands arrive (WM_APPCOMMAND)
   // Some commands are implemented on on other platforms as well
-  virtual void OnExecuteAppCommand(const std::string& command_name) {}
+  virtual void OnExecuteAppCommand(std::string_view command_name) {}
 
   virtual void UpdateWindowControlsOverlay(const gfx::Rect& bounding_rect) {}
 };

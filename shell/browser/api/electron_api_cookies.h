@@ -8,20 +8,24 @@
 #include <string>
 
 #include "base/callback_list.h"
-#include "gin/handle.h"
-#include "net/cookies/canonical_cookie.h"
-#include "net/cookies/cookie_change_dispatcher.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "shell/browser/event_emitter_mixin.h"
-#include "shell/common/gin_helper/promise.h"
-#include "shell/common/gin_helper/trackable_object.h"
 
-namespace base {
-class DictionaryValue;
-}
+class GURL;
+
+namespace gin {
+template <typename T>
+class Handle;
+}  // namespace gin
 
 namespace gin_helper {
 class Dictionary;
-}
+}  // namespace gin_helper
+
+namespace net {
+struct CookieChangeInfo;
+}  // namespace net
 
 namespace electron {
 
@@ -29,8 +33,8 @@ class ElectronBrowserContext;
 
 namespace api {
 
-class Cookies : public gin::Wrappable<Cookies>,
-                public gin_helper::EventEmitterMixin<Cookies> {
+class Cookies final : public gin::Wrappable<Cookies>,
+                      public gin_helper::EventEmitterMixin<Cookies> {
  public:
   static gin::Handle<Cookies> Create(v8::Isolate* isolate,
                                      ElectronBrowserContext* browser_context);
@@ -46,13 +50,12 @@ class Cookies : public gin::Wrappable<Cookies>,
   Cookies& operator=(const Cookies&) = delete;
 
  protected:
-  Cookies(v8::Isolate* isolate, ElectronBrowserContext* browser_context);
+  explicit Cookies(ElectronBrowserContext* browser_context);
   ~Cookies() override;
 
   v8::Local<v8::Promise> Get(v8::Isolate*,
                              const gin_helper::Dictionary& filter);
-  v8::Local<v8::Promise> Set(v8::Isolate*,
-                             const base::DictionaryValue& details);
+  v8::Local<v8::Promise> Set(v8::Isolate*, base::Value::Dict details);
   v8::Local<v8::Promise> Remove(v8::Isolate*,
                                 const GURL& url,
                                 const std::string& name);
@@ -65,7 +68,7 @@ class Cookies : public gin::Wrappable<Cookies>,
   base::CallbackListSubscription cookie_change_subscription_;
 
   // Weak reference; ElectronBrowserContext is guaranteed to outlive us.
-  ElectronBrowserContext* browser_context_;
+  raw_ptr<ElectronBrowserContext> browser_context_;
 };
 
 }  // namespace api
