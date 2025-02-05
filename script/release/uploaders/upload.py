@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-from __future__ import print_function
 import argparse
 import datetime
 import hashlib
@@ -17,13 +16,15 @@ sys.path.append(
 
 from zipfile import ZipFile
 from lib.config import PLATFORM, get_target_arch, \
-                       get_zip_name, enable_verbose_mode, get_platform_key
+                       get_zip_name, set_verbose_mode, \
+                       is_verbose_mode, get_platform_key, \
+                       verbose_mode_print
 from lib.util import get_electron_branding, execute, get_electron_version, \
                      store_artifact, get_electron_exec, get_out_dir, \
                      SRC_DIR, ELECTRON_DIR, TS_NODE
 
 
-ELECTRON_VERSION = get_electron_version()
+ELECTRON_VERSION = 'v' + get_electron_version()
 
 PROJECT_NAME = get_electron_branding()['project_name']
 PRODUCT_NAME = get_electron_branding()['product_name']
@@ -45,17 +46,15 @@ CXX_OBJECTS_NAME = get_zip_name(PROJECT_NAME, ELECTRON_VERSION,
 
 def main():
   args = parse_args()
-  if args.verbose:
-    enable_verbose_mode()
-  if args.upload_to_s3:
+  set_verbose_mode(args.verbose)
+  if args.upload_to_storage:
     utcnow = datetime.datetime.utcnow()
     args.upload_timestamp = utcnow.strftime('%Y%m%d')
 
   build_version = get_electron_build_version()
   if not ELECTRON_VERSION.startswith(build_version):
-    error = 'Tag name ({0}) should match build version ({1})\n'.format(
-        ELECTRON_VERSION, build_version)
-    sys.stderr.write(error)
+    errmsg = f"Tag ({ELECTRON_VERSION}) should match build ({build_version})\n"
+    sys.stderr.write(errmsg)
     sys.stderr.flush()
     return 1
 
@@ -64,7 +63,7 @@ def main():
   if not release['draft']:
     tag_exists = True
 
-  if not args.upload_to_s3:
+  if not args.upload_to_storage:
     assert release['exists'], \
           'Release does not exist; cannot upload to GitHub!'
     assert tag_exists == args.overwrite, \
@@ -75,11 +74,11 @@ def main():
   electron_zip = os.path.join(OUT_DIR, DIST_NAME)
   shutil.copy2(os.path.join(OUT_DIR, 'dist.zip'), electron_zip)
   upload_electron(release, electron_zip, args)
-  if get_target_arch() != 'mips64el':
-    if (get_target_arch() != 'ia32' or PLATFORM != 'win32'):
-      symbols_zip = os.path.join(OUT_DIR, SYMBOLS_NAME)
-      shutil.copy2(os.path.join(OUT_DIR, 'symbols.zip'), symbols_zip)
-      upload_electron(release, symbols_zip, args)
+
+  symbols_zip = os.path.join(OUT_DIR, SYMBOLS_NAME)
+  shutil.copy2(os.path.join(OUT_DIR, 'symbols.zip'), symbols_zip)
+  upload_electron(release, symbols_zip, args)
+
   if PLATFORM == 'darwin':
     if get_platform_key() == 'darwin' and get_target_arch() == 'x64':
       api_path = os.path.join(ELECTRON_DIR, 'electron-api.json')
@@ -92,14 +91,13 @@ def main():
     shutil.copy2(os.path.join(OUT_DIR, 'dsym.zip'), dsym_zip)
     upload_electron(release, dsym_zip, args)
 
-    dsym_snaphot_zip = os.path.join(OUT_DIR, DSYM_SNAPSHOT_NAME)
-    shutil.copy2(os.path.join(OUT_DIR, 'dsym-snapshot.zip'), dsym_snaphot_zip)
-    upload_electron(release, dsym_snaphot_zip, args)    
+    dsym_snapshot_zip = os.path.join(OUT_DIR, DSYM_SNAPSHOT_NAME)
+    shutil.copy2(os.path.join(OUT_DIR, 'dsym-snapshot.zip'), dsym_snapshot_zip)
+    upload_electron(release, dsym_snapshot_zip, args)
   elif PLATFORM == 'win32':
-    if get_target_arch() != 'ia32':
-      pdb_zip = os.path.join(OUT_DIR, PDB_NAME)
-      shutil.copy2(os.path.join(OUT_DIR, 'pdb.zip'), pdb_zip)
-      upload_electron(release, pdb_zip, args)
+    pdb_zip = os.path.join(OUT_DIR, PDB_NAME)
+    shutil.copy2(os.path.join(OUT_DIR, 'pdb.zip'), pdb_zip)
+    upload_electron(release, pdb_zip, args)
   elif PLATFORM == 'linux':
     debug_zip = os.path.join(OUT_DIR, DEBUG_NAME)
     shutil.copy2(os.path.join(OUT_DIR, 'debug.zip'), debug_zip)
@@ -148,7 +146,7 @@ def main():
       OUT_DIR, 'hunspell_dictionaries.zip')
     upload_electron(release, hunspell_dictionaries_zip, args)
 
-  if not tag_exists and not args.upload_to_s3:
+  if not tag_exists and not args.upload_to_storage:
     # Upload symbols to symbol server.
     run_python_upload_script('upload-symbols.py')
     if PLATFORM == 'win32':
@@ -174,9 +172,9 @@ def parse_args():
   parser.add_argument('-p', '--publish-release',
                       help='Publish the release',
                       action='store_true')
-  parser.add_argument('-s', '--upload_to_s3',
-                      help='Upload assets to s3 bucket',
-                      dest='upload_to_s3',
+  parser.add_argument('-s', '--upload_to_storage',
+                      help='Upload assets to azure bucket',
+                      dest='upload_to_storage',
                       action='store_true',
                       default=False,
                       required=False)
@@ -342,10 +340,10 @@ def upload_electron(release, file_path, args):
   except NonZipFileError:
     pass
 
-  # if upload_to_s3 is set, skip github upload.
-  if args.upload_to_s3:
-    key_prefix = 'electron-artifacts/{0}_{1}'.format(args.version,
-                                                     args.upload_timestamp)
+  # if upload_to_storage is set, skip github upload.
+  # todo (vertedinde): migrate this variable to upload_to_storage
+  if args.upload_to_storage:
+    key_prefix = f'release-builds/{args.version}_{args.upload_timestamp}'
     store_artifact(os.path.dirname(file_path), key_prefix, [file_path])
     upload_sha256_checksum(args.version, file_path, key_prefix)
     return
@@ -358,32 +356,43 @@ def upload_electron(release, file_path, args):
 
 
 def upload_io_to_github(release, filename, filepath, version):
-  print('Uploading %s to Github' % \
-      (filename))
+  print(f'Uploading {filename} to GitHub')
   script_path = os.path.join(
     ELECTRON_DIR, 'script', 'release', 'uploaders', 'upload-to-github.ts')
-  execute([TS_NODE, script_path, filepath, filename, str(release['id']),
-          version])
+  with subprocess.Popen([TS_NODE, script_path, filepath,
+                         filename, str(release['id']), version],
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.STDOUT) as upload_process:
+    if is_verbose_mode():
+      for c in iter(lambda: upload_process.stdout.read(1), b""):
+        sys.stdout.buffer.write(c)
+        sys.stdout.flush()
 
 
 def upload_sha256_checksum(version, file_path, key_prefix=None):
-  checksum_path = '{}.sha256sum'.format(file_path)
+  checksum_path = f'{file_path}.sha256sum'
   if key_prefix is None:
-    key_prefix = 'atom-shell/tmp/{0}'.format(version)
+    key_prefix = f'checksums-scratchpad/{version}'
   sha256 = hashlib.sha256()
   with open(file_path, 'rb') as f:
     sha256.update(f.read())
 
   filename = os.path.basename(file_path)
-  with open(checksum_path, 'w') as checksum:
-    checksum.write('{} *{}'.format(sha256.hexdigest(), filename))
+  with open(checksum_path, 'w', encoding='utf-8') as checksum:
+    checksum.write(f'{sha256.hexdigest()} *{filename}')
   store_artifact(os.path.dirname(checksum_path), key_prefix, [checksum_path])
 
 
 def get_release(version):
   script_path = os.path.join(
-    ELECTRON_DIR, 'script', 'release', 'find-github-release.js')
-  release_info = execute(['node', script_path, version])
+    ELECTRON_DIR, 'script', 'release', 'find-github-release.ts')
+
+  # Strip warnings from stdout to ensure the only output is the desired object
+  release_env = os.environ.copy()
+  release_env['NODE_NO_WARNINGS'] = '1'
+  release_info = execute([TS_NODE, script_path, version], release_env)
+  verbose_mode_print(f'Release info for version: {version}:\n')
+  verbose_mode_print(release_info)
   release = json.loads(release_info)
   return release
 

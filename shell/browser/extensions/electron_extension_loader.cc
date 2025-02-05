@@ -7,14 +7,12 @@
 #include <utility>
 
 #include "base/auto_reset.h"
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/task/task_runner_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "extensions/browser/extension_file_task_runner.h"
@@ -104,9 +102,8 @@ void ElectronExtensionLoader::LoadExtension(
     const base::FilePath& extension_dir,
     int load_flags,
     base::OnceCallback<void(const Extension*, const std::string&)> cb) {
-  base::PostTaskAndReplyWithResult(
-      GetExtensionFileTaskRunner().get(), FROM_HERE,
-      base::BindOnce(&LoadUnpacked, extension_dir, load_flags),
+  GetExtensionFileTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&LoadUnpacked, extension_dir, load_flags),
       base::BindOnce(&ElectronExtensionLoader::FinishExtensionLoad,
                      weak_factory_.GetWeakPtr(), std::move(cb)));
 }
@@ -150,10 +147,11 @@ void ElectronExtensionLoader::FinishExtensionLoad(
       ExtensionPrefs::ScopedDictionaryUpdate update(
           extension_prefs, extension.get()->id(),
           extensions::pref_names::kPrefPreferences);
+
       auto preference = update.Create();
-      const base::Time install_time = base::Time::Now();
-      preference->SetString(
-          "install_time", base::NumberToString(install_time.ToInternalValue()));
+      const int64_t now_usec =
+          base::Time::Now().since_origin().InMicroseconds();
+      preference->SetString("install_time", base::NumberToString(now_usec));
     }
   }
 
@@ -196,6 +194,16 @@ void ElectronExtensionLoader::PostActivateExtension(
 void ElectronExtensionLoader::PostDeactivateExtension(
     scoped_refptr<const Extension> extension) {}
 
+void ElectronExtensionLoader::PreUninstallExtension(
+    scoped_refptr<const Extension> extension) {}
+
+void ElectronExtensionLoader::PostUninstallExtension(
+    scoped_refptr<const Extension> extension,
+    base::OnceClosure done_callback) {}
+
+void ElectronExtensionLoader::PostNotifyUninstallExtension(
+    scoped_refptr<const Extension> extension) {}
+
 void ElectronExtensionLoader::LoadExtensionForReload(
     const ExtensionId& extension_id,
     const base::FilePath& path,
@@ -206,12 +214,21 @@ void ElectronExtensionLoader::LoadExtensionForReload(
   // when loading this extension and retain it here. As is, reloading an
   // extension will cause the file access permission to be dropped.
   int load_flags = Extension::FOLLOW_SYMLINKS_ANYWHERE;
-  base::PostTaskAndReplyWithResult(
-      GetExtensionFileTaskRunner().get(), FROM_HERE,
-      base::BindOnce(&LoadUnpacked, path, load_flags),
+  GetExtensionFileTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&LoadUnpacked, path, load_flags),
       base::BindOnce(&ElectronExtensionLoader::FinishExtensionReload,
                      weak_factory_.GetWeakPtr(), extension_id));
   did_schedule_reload_ = true;
+}
+
+void ElectronExtensionLoader::ShowExtensionDisabledError(
+    const Extension* extension,
+    bool is_remote_install) {}
+
+void ElectronExtensionLoader::FinishDelayedInstallationsIfAny() {}
+
+bool ElectronExtensionLoader::CanAddExtension(const Extension* extension) {
+  return true;
 }
 
 bool ElectronExtensionLoader::CanEnableExtension(const Extension* extension) {

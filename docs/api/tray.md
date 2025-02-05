@@ -8,7 +8,7 @@ Process: [Main](../glossary.md#main-process)
 
 `Tray` is an [EventEmitter][event-emitter].
 
-```javascript
+```js
 const { app, Menu, Tray } = require('electron')
 
 let tray = null
@@ -25,18 +25,21 @@ app.whenReady().then(() => {
 })
 ```
 
-__Platform limitations:__
+**Platform Considerations**
 
-* On Linux the app indicator will be used if it is supported, otherwise
+**Linux**
+
+* Tray icon uses [StatusNotifierItem](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/)
+  by default, when it is not available in user's desktop environment the
   `GtkStatusIcon` will be used instead.
-* On Linux distributions that only have app indicator support, you have to
-  install `libappindicator1` to make the tray icon work.
-* App indicator will only be shown when it has a context menu.
-* When app indicator is used on Linux, the `click` event is ignored.
-* On Linux in order for changes made to individual `MenuItem`s to take effect,
+* The `click` event is emitted when the tray icon receives activation from
+  user, however the StatusNotifierItem spec does not specify which action would
+  cause an activation, for some environments it is left mouse click, but for
+  some it might be double left mouse click.
+* In order for changes made to individual `MenuItem`s to take effect,
   you have to call `setContextMenu` again. For example:
 
-```javascript
+```js
 const { app, Menu, Tray } = require('electron')
 
 let appIcon = null
@@ -55,10 +58,16 @@ app.whenReady().then(() => {
 })
 ```
 
-* On Windows it is recommended to use `ICO` icons to get best visual effects.
+**MacOS**
 
-If you want to keep exact same behaviors on all platforms, you should not
-rely on the `click` event and always attach a context menu to the tray icon.
+* Icons passed to the Tray constructor should be [Template Images](native-image.md#template-image-macos).
+* To make sure your icon isn't grainy on retina monitors, be sure your `@2x` image is 144dpi.
+* If you are bundling your application (e.g., with webpack for development), be sure that the file names are not being mangled or hashed. The filename needs to end in Template, and the `@2x` image needs to have the same filename as the standard image, or MacOS will not magically invert your image's colors or use the high density image.
+* 16x16 (72dpi) and 32x32@2x (144dpi) work well for most icons.
+
+**Windows**
+
+* It is recommended to use `ICO` icons to get best visual effects.
 
 ### `new Tray(image, [guid])`
 
@@ -81,6 +90,9 @@ Returns:
 
 Emitted when the tray icon is clicked.
 
+Note that on Linux this event is emitted when the tray icon receives an
+activation, which might not necessarily be left mouse click.
+
 #### Event: 'right-click' _macOS_ _Windows_
 
 Returns:
@@ -98,6 +110,15 @@ Returns:
 * `bounds` [Rectangle](structures/rectangle.md) - The bounds of tray icon.
 
 Emitted when the tray icon is double clicked.
+
+#### Event: 'middle-click' _Windows_
+
+Returns:
+
+* `event` [KeyboardEvent](structures/keyboard-event.md)
+* `bounds` [Rectangle](structures/rectangle.md) - The bounds of tray icon.
+
+Emitted when the tray icon is middle clicked.
 
 #### Event: 'balloon-show' _Windows_
 
@@ -166,7 +187,7 @@ Returns:
 
 Emitted when the mouse clicks the tray icon.
 
-#### Event: 'mouse-enter' _macOS_
+#### Event: 'mouse-enter' _macOS_ _Windows_
 
 Returns:
 
@@ -175,7 +196,7 @@ Returns:
 
 Emitted when the mouse enters the tray icon.
 
-#### Event: 'mouse-leave' _macOS_
+#### Event: 'mouse-leave' _macOS_ _Windows_
 
 Returns:
 
@@ -223,7 +244,7 @@ Sets the hover text for this tray icon.
 
 * `title` string
 * `options` Object (optional)
-  * `fontType` string (optional) - The font family variant to display, can be `monospaced` or `monospacedDigit`. `monospaced` is available in macOS 10.15+ and `monospacedDigit` is available in macOS 10.11+.  When left blank, the title uses the default system font.
+  * `fontType` string (optional) - The font family variant to display, can be `monospaced` or `monospacedDigit`. `monospaced` is available in macOS 10.15+ When left blank, the title uses the default system font.
 
 Sets the title displayed next to the tray icon in the status bar (Support ANSI colors).
 
@@ -257,9 +278,9 @@ Returns `boolean` - Whether double click events will be ignored.
 
 Displays a tray balloon.
 
-[NIIF_NOSOUND]: https://docs.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-notifyicondataa#niif_nosound-0x00000010
-[NIIF_LARGE_ICON]: https://docs.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-notifyicondataa#niif_large_icon-0x00000020
-[NIIF_RESPECT_QUIET_TIME]: https://docs.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-notifyicondataa#niif_respect_quiet_time-0x00000080
+[NIIF_NOSOUND]: https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-notifyicondataa#niif_nosound-0x00000010
+[NIIF_LARGE_ICON]: https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-notifyicondataa#niif_large_icon-0x00000020
+[NIIF_RESPECT_QUIET_TIME]: https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-notifyicondataa#niif_respect_quiet_time-0x00000080
 
 #### `tray.removeBalloon()` _Windows_
 

@@ -5,7 +5,8 @@
 // that does include proprietary codecs.
 
 const { app, BrowserWindow, ipcMain } = require('electron');
-const path = require('path');
+
+const path = require('node:path');
 
 const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 const FIVE_MINUTES = 5 * 60 * 1000;
@@ -21,8 +22,8 @@ app.whenReady().then(() => {
     }
   });
 
-  window.webContents.on('crashed', (event, killed) => {
-    console.log(`WebContents crashed (killed=${killed})`);
+  window.webContents.on('render-process-gone', (event, details) => {
+    console.log(`WebContents crashed ${JSON.stringify(details)}`);
     app.exit(1);
   });
 

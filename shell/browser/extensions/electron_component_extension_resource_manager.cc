@@ -8,11 +8,8 @@
 #include <utility>
 
 #include "base/containers/contains.h"
-#include "base/logging.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
 #include "base/values.h"
-#include "build/build_config.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/grit/component_extension_resources_map.h"
 #include "electron/buildflags/buildflags.h"
@@ -27,19 +24,18 @@ namespace extensions {
 
 ElectronComponentExtensionResourceManager::
     ElectronComponentExtensionResourceManager() {
-  AddComponentResourceEntries(kComponentExtensionResources,
-                              kComponentExtensionResourcesSize);
+  AddComponentResourceEntries(kComponentExtensionResources);
 #if BUILDFLAG(ENABLE_PDF_VIEWER)
-  AddComponentResourceEntries(kPdfResources, kPdfResourcesSize);
+  AddComponentResourceEntries(kPdfResources);
 
   // Register strings for the PDF viewer, so that $i18n{} replacements work.
-  base::Value pdf_strings(base::Value::Type::DICTIONARY);
+  base::Value::Dict pdf_strings;
   pdf_extension_util::AddStrings(
       pdf_extension_util::PdfViewerContext::kPdfViewer, &pdf_strings);
-  pdf_extension_util::AddAdditionalData(true, &pdf_strings);
+  pdf_extension_util::AddAdditionalData(false, true, &pdf_strings);
 
   ui::TemplateReplacements pdf_viewer_replacements;
-  ui::TemplateReplacementsFromDictionaryValue(pdf_strings.GetDict(),
+  ui::TemplateReplacementsFromDictionaryValue(pdf_strings,
                                               &pdf_viewer_replacements);
   extension_template_replacements_[extension_misc::kPdfExtensionId] =
       std::move(pdf_viewer_replacements);
@@ -83,20 +79,18 @@ ElectronComponentExtensionResourceManager::GetTemplateReplacementsForExtension(
 }
 
 void ElectronComponentExtensionResourceManager::AddComponentResourceEntries(
-    const webui::ResourcePath* entries,
-    size_t size) {
+    const base::span<const webui::ResourcePath> entries) {
   base::FilePath gen_folder_path = base::FilePath().AppendASCII(
       "@out_folder@/gen/chrome/browser/resources/");
   gen_folder_path = gen_folder_path.NormalizePathSeparators();
 
-  for (size_t i = 0; i < size; ++i) {
-    base::FilePath resource_path =
-        base::FilePath().AppendASCII(entries[i].path);
+  for (const auto& entry : entries) {
+    base::FilePath resource_path = base::FilePath().AppendASCII(entry.path);
     resource_path = resource_path.NormalizePathSeparators();
 
     if (!gen_folder_path.IsParent(resource_path)) {
       DCHECK(!base::Contains(path_to_resource_id_, resource_path));
-      path_to_resource_id_[resource_path] = entries[i].id;
+      path_to_resource_id_[resource_path] = entry.id;
     } else {
       // If the resource is a generated file, strip the generated folder's path,
       // so that it can be served from a normal URL (as if it were not
@@ -105,7 +99,7 @@ void ElectronComponentExtensionResourceManager::AddComponentResourceEntries(
           base::FilePath().AppendASCII(resource_path.AsUTF8Unsafe().substr(
               gen_folder_path.value().length()));
       DCHECK(!base::Contains(path_to_resource_id_, effective_path));
-      path_to_resource_id_[effective_path] = entries[i].id;
+      path_to_resource_id_[effective_path] = entry.id;
     }
   }
 }

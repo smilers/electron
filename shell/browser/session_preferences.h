@@ -9,6 +9,7 @@
 
 #include "base/files/file_path.h"
 #include "base/supports_user_data.h"
+#include "shell/browser/preload_script.h"
 
 namespace content {
 class BrowserContext;
@@ -20,22 +21,22 @@ class SessionPreferences : public base::SupportsUserData::Data {
  public:
   static SessionPreferences* FromBrowserContext(
       content::BrowserContext* context);
-  static std::vector<base::FilePath> GetValidPreloads(
-      content::BrowserContext* context);
 
-  explicit SessionPreferences(content::BrowserContext* context);
+  static void CreateForBrowserContext(content::BrowserContext* context);
+
   ~SessionPreferences() override;
 
-  void set_preloads(const std::vector<base::FilePath>& preloads) {
-    preloads_ = preloads;
-  }
-  const std::vector<base::FilePath>& preloads() const { return preloads_; }
+  std::vector<PreloadScript>& preload_scripts() { return preload_scripts_; }
+
+  bool HasServiceWorkerPreloadScript();
 
  private:
+  SessionPreferences();
+
   // The user data key.
   static int kLocatorKey;
 
-  std::vector<base::FilePath> preloads_;
+  std::vector<PreloadScript> preload_scripts_;
 };
 
 }  // namespace electron

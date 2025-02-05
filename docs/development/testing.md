@@ -32,9 +32,6 @@ app (surprise!) that can be found in the `spec` folder. Note that it has
 its own `package.json` and that its dependencies are therefore not defined
 in the top-level `package.json`.
 
-To run only tests in a specific process, run `npm run test --runners=PROCESS`
-where `PROCESS` is one of `main` or `remote`.
-
 To run only specific tests matching a pattern, run `npm run test --
 -g=PATTERN`, replacing the `PATTERN` with a regex that matches the tests
 you would like to run. As an example: If you want to run only IPC tests, you
@@ -69,7 +66,7 @@ the Node.js source tree.
 2. Node headers have to be compiled for your configuration.
 
    ```powershell
-   ninja -C out\Testing third_party\electron_node:headers
+   ninja -C out\Testing electron:node_headers
    ```
 
 3. The electron.lib has to be copied as node.lib.
@@ -82,7 +79,7 @@ the Node.js source tree.
 
 #### Missing fonts
 
-[Some Windows 10 devices](https://docs.microsoft.com/en-us/typography/fonts/windows_10_font_list) do not ship with the Meiryo font installed, which may cause a font fallback test to fail. To install Meiryo:
+[Some Windows 10 devices](https://learn.microsoft.com/en-us/typography/fonts/windows_10_font_list) do not ship with the Meiryo font installed, which may cause a font fallback test to fail. To install Meiryo:
 
 1. Push the Windows key and search for _Manage optional features_.
 2. Click _Add a feature_.

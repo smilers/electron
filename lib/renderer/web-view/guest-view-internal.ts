@@ -1,41 +1,26 @@
+import { IPC_MESSAGES } from '@electron/internal/common/ipc-messages';
 import { ipcRendererInternal } from '@electron/internal/renderer/ipc-renderer-internal';
 import * as ipcRendererUtils from '@electron/internal/renderer/ipc-renderer-internal-utils';
-import { IPC_MESSAGES } from '@electron/internal/common/ipc-messages';
 
 const { mainFrame: webFrame } = process._linkedBinding('electron_renderer_web_frame');
 
 export interface GuestViewDelegate {
   dispatchEvent (eventName: string, props: Record<string, any>): void;
-  reset(): void;
 }
 
-const DEPRECATED_EVENTS: Record<string, string> = {
-  'page-title-updated': 'page-title-set'
-} as const;
-
 export function registerEvents (viewInstanceId: number, delegate: GuestViewDelegate) {
-  ipcRendererInternal.on(`${IPC_MESSAGES.GUEST_VIEW_INTERNAL_DESTROY_GUEST}-${viewInstanceId}`, function () {
-    delegate.reset();
-    delegate.dispatchEvent('destroyed', {});
-  });
-
   ipcRendererInternal.on(`${IPC_MESSAGES.GUEST_VIEW_INTERNAL_DISPATCH_EVENT}-${viewInstanceId}`, function (event, eventName, props) {
-    if (DEPRECATED_EVENTS[eventName] != null) {
-      delegate.dispatchEvent(DEPRECATED_EVENTS[eventName], props);
-    }
-
     delegate.dispatchEvent(eventName, props);
   });
 }
 
 export function deregisterEvents (viewInstanceId: number) {
-  ipcRendererInternal.removeAllListeners(`${IPC_MESSAGES.GUEST_VIEW_INTERNAL_DESTROY_GUEST}-${viewInstanceId}`);
   ipcRendererInternal.removeAllListeners(`${IPC_MESSAGES.GUEST_VIEW_INTERNAL_DISPATCH_EVENT}-${viewInstanceId}`);
 }
 
 export function createGuest (iframe: HTMLIFrameElement, elementInstanceId: number, params: Record<string, any>): Promise<number> {
   if (!(iframe instanceof HTMLIFrameElement)) {
-    throw new Error('Invalid embedder frame');
+    throw new TypeError('Invalid embedder frame');
   }
 
   const embedderFrameId = webFrame.getWebFrameId(iframe.contentWindow!);

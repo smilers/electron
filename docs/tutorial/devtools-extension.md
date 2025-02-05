@@ -15,7 +15,7 @@ NPM package that does just that.
 If you don't want to use the tooling approach, you can also do all of the necessary
 operations by hand. To load an extension in Electron, you need to download it via Chrome,
 locate its filesystem path, and then load it into your [Session][session] by calling the
-[`ses.loadExtension`] API.
+[`ses.loadExtension`][load-extension] API.
 
 Using the [React Developer Tools][react-devtools] as an example:
 
@@ -33,20 +33,20 @@ Using the [React Developer Tools][react-devtools] as an example:
 1. Pass the location of the extension to the [`ses.loadExtension`][load-extension]
    API. For React Developer Tools `v4.9.0`, it looks something like:
 
-   ```javascript
-    const { app, session } = require('electron')
-    const path = require('path')
-    const os = require('os')
+   ```js
+   const { app, session } = require('electron')
+   const path = require('node:path')
+   const os = require('node:os')
 
-    // on macOS
-    const reactDevToolsPath = path.join(
-      os.homedir(),
-      '/Library/Application Support/Google/Chrome/Default/Extensions/fmkadmapgofadopljbjfkapdkoienihi/4.9.0_0'
-    )
+   // on macOS
+   const reactDevToolsPath = path.join(
+     os.homedir(),
+     '/Library/Application Support/Google/Chrome/Default/Extensions/fmkadmapgofadopljbjfkapdkoienihi/4.9.0_0'
+   )
 
-    app.whenReady().then(async () => {
-      await session.defaultSession.loadExtension(reactDevToolsPath)
-    })
+   app.whenReady().then(async () => {
+     await session.defaultSession.loadExtension(reactDevToolsPath)
+   })
    ```
 
 **Notes:**
@@ -78,7 +78,6 @@ The following Devtools extensions have been tested to work in Electron:
 * [React Developer Tools](https://chrome.google.com/webstore/detail/react-developer-tools/fmkadmapgofadopljbjfkapdkoienihi)
 * [Backbone Debugger](https://chrome.google.com/webstore/detail/backbone-debugger/bhljhndlimiafopmmhjlgfpnnchjjbhd)
 * [jQuery Debugger](https://chrome.google.com/webstore/detail/jquery-debugger/dbhhnnnpaeobfddmlalhnehgclcmjimi)
-* [AngularJS Batarang](https://chrome.google.com/webstore/detail/angularjs-batarang/ighdmehidhipcmcojjgiloacoafjmpfk)
 * [Vue.js devtools](https://chrome.google.com/webstore/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd)
 * [Cerebral Debugger](https://cerebraljs.com/docs/introduction/devtools.html)
 * [Redux DevTools Extension](https://chrome.google.com/webstore/detail/redux-devtools/lmhkpmbekcpmknklioeibfkpmmfibljd)

@@ -8,9 +8,9 @@
 #include <string>
 
 #include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/download/public/common/download_item.h"
-#include "gin/handle.h"
 #include "gin/wrappable.h"
 #include "shell/browser/event_emitter_mixin.h"
 #include "shell/browser/ui/file_dialog.h"
@@ -18,14 +18,17 @@
 
 class GURL;
 
-namespace electron {
+namespace gin {
+template <typename T>
+class Handle;
+}  // namespace gin
 
-namespace api {
+namespace electron::api {
 
-class DownloadItem : public gin::Wrappable<DownloadItem>,
-                     public gin_helper::Pinnable<DownloadItem>,
-                     public gin_helper::EventEmitterMixin<DownloadItem>,
-                     public download::DownloadItem::Observer {
+class DownloadItem final : public gin::Wrappable<DownloadItem>,
+                           public gin_helper::Pinnable<DownloadItem>,
+                           public gin_helper::EventEmitterMixin<DownloadItem>,
+                           private download::DownloadItem::Observer {
  public:
   static gin::Handle<DownloadItem> FromOrCreate(v8::Isolate* isolate,
                                                 download::DownloadItem* item);
@@ -63,8 +66,10 @@ class DownloadItem : public gin::Wrappable<DownloadItem>,
   void Resume();
   bool CanResume() const;
   void Cancel();
+  int64_t GetCurrentBytesPerSecond() const;
   int64_t GetReceivedBytes() const;
   int64_t GetTotalBytes() const;
+  int GetPercentComplete() const;
   std::string GetMimeType() const;
   bool HasUserGesture() const;
   std::string GetFilename() const;
@@ -77,18 +82,17 @@ class DownloadItem : public gin::Wrappable<DownloadItem>,
   std::string GetLastModifiedTime() const;
   std::string GetETag() const;
   double GetStartTime() const;
+  double GetEndTime() const;
 
   base::FilePath save_path_;
   file_dialog::DialogSettings dialog_options_;
-  download::DownloadItem* download_item_;
+  raw_ptr<download::DownloadItem> download_item_;
 
-  v8::Isolate* isolate_;
+  raw_ptr<v8::Isolate> isolate_;
 
   base::WeakPtrFactory<DownloadItem> weak_factory_{this};
 };
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api
 
 #endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_DOWNLOAD_ITEM_H_

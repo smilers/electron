@@ -4,25 +4,24 @@
 
 #include "shell/browser/api/electron_api_debugger.h"
 
-#include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/web_contents.h"
+#include "gin/handle.h"
 #include "gin/object_template_builder.h"
 #include "gin/per_isolate_data.h"
 #include "shell/browser/javascript_environment.h"
 #include "shell/common/gin_converters/value_converter.h"
-#include "shell/common/node_includes.h"
+#include "shell/common/gin_helper/promise.h"
 
 using content::DevToolsAgentHost;
 
-namespace electron {
-
-namespace api {
+namespace electron::api {
 
 gin::WrapperInfo Debugger::kWrapperInfo = {gin::kEmbedderNativeGin};
 
@@ -43,50 +42,39 @@ void Debugger::DispatchProtocolMessage(DevToolsAgentHost* agent_host,
   DCHECK(agent_host == agent_host_);
 
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-
-  v8::Locker locker(isolate);
   v8::HandleScope handle_scope(isolate);
 
-  base::StringPiece message_str(reinterpret_cast<const char*>(message.data()),
-                                message.size());
-  std::unique_ptr<base::Value> parsed_message =
-      base::JSONReader::ReadDeprecated(message_str,
-                                       base::JSON_REPLACE_INVALID_CHARACTERS);
+  std::string_view message_str(reinterpret_cast<const char*>(message.data()),
+                               message.size());
+  std::optional<base::Value> parsed_message = base::JSONReader::Read(
+      message_str, base::JSON_REPLACE_INVALID_CHARACTERS);
   if (!parsed_message || !parsed_message->is_dict())
     return;
-  auto* dict = static_cast<base::DictionaryValue*>(parsed_message.get());
-  int id;
-  if (!dict->GetInteger("id", &id)) {
-    std::string method;
-    if (!dict->GetString("method", &method))
+  base::Value::Dict& dict = parsed_message->GetDict();
+  std::optional<int> id = dict.FindInt("id");
+  if (!id) {
+    std::string* method = dict.FindString("method");
+    if (!method)
       return;
-    std::string session_id;
-    dict->GetString("sessionId", &session_id);
-    base::DictionaryValue* params_value = nullptr;
-    base::DictionaryValue params;
-    if (dict->GetDictionary("params", &params_value))
-      params.Swap(params_value);
-    Emit("message", method, params, session_id);
+    std::string* session_id = dict.FindString("sessionId");
+    base::Value::Dict* params = dict.FindDict("params");
+    Emit("message", *method, params ? std::move(*params) : base::Value::Dict(),
+         session_id ? *session_id : "");
   } else {
-    auto it = pending_requests_.find(id);
+    auto it = pending_requests_.find(*id);
     if (it == pending_requests_.end())
       return;
 
-    gin_helper::Promise<base::DictionaryValue> promise = std::move(it->second);
+    gin_helper::Promise<base::Value::Dict> promise = std::move(it->second);
     pending_requests_.erase(it);
 
-    base::DictionaryValue* error = nullptr;
-    if (dict->GetDictionary("error", &error)) {
-      std::string message;
-      error->GetString("message", &message);
-      promise.RejectWithErrorMessage(message);
+    base::Value::Dict* error = dict.FindDict("error");
+    if (error) {
+      std::string* error_message = error->FindString("message");
+      promise.RejectWithErrorMessage(error_message ? *error_message : "");
     } else {
-      base::DictionaryValue* result_body = nullptr;
-      base::DictionaryValue result;
-      if (dict->GetDictionary("result", &result_body)) {
-        result.Swap(result_body);
-      }
-      promise.Resolve(result);
+      base::Value::Dict* result = dict.FindDict("result");
+      promise.Resolve(result ? std::move(*result) : base::Value::Dict());
     }
   }
 }
@@ -137,7 +125,7 @@ void Debugger::Detach() {
 
 v8::Local<v8::Promise> Debugger::SendCommand(gin::Arguments* args) {
   v8::Isolate* isolate = args->isolate();
-  gin_helper::Promise<base::DictionaryValue> promise(isolate);
+  gin_helper::Promise<base::Value::Dict> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
   if (!agent_host_) {
@@ -151,7 +139,7 @@ v8::Local<v8::Promise> Debugger::SendCommand(gin::Arguments* args) {
     return handle;
   }
 
-  base::DictionaryValue command_params;
+  base::Value::Dict command_params;
   args->GetNext(&command_params);
 
   std::string session_id;
@@ -160,24 +148,21 @@ v8::Local<v8::Promise> Debugger::SendCommand(gin::Arguments* args) {
     return handle;
   }
 
-  base::DictionaryValue request;
+  base::Value::Dict request;
   int request_id = ++previous_request_id_;
   pending_requests_.emplace(request_id, std::move(promise));
-  request.SetInteger("id", request_id);
-  request.SetString("method", method);
-  if (!command_params.DictEmpty()) {
-    request.Set("params",
-                base::Value::ToUniquePtrValue(command_params.Clone()));
+  request.Set("id", request_id);
+  request.Set("method", method);
+  if (!command_params.empty()) {
+    request.Set("params", std::move(command_params));
   }
 
   if (!session_id.empty()) {
-    request.SetString("sessionId", session_id);
+    request.Set("sessionId", session_id);
   }
 
-  std::string json_args;
-  base::JSONWriter::Write(request, &json_args);
-  agent_host_->DispatchProtocolMessage(
-      this, base::as_bytes(base::make_span(json_args)));
+  const auto json_args = base::WriteJson(request).value_or("");
+  agent_host_->DispatchProtocolMessage(this, base::as_byte_span(json_args));
 
   return handle;
 }
@@ -208,6 +193,4 @@ const char* Debugger::GetTypeName() {
   return "Debugger";
 }
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api

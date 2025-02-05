@@ -14,23 +14,25 @@
 #include "shell/browser/ui/views/frameless_view.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/skia_conversions.h"
-#include "ui/gfx/skia_util.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/gtk/gtk_compat.h"  // nogncheck
 #include "ui/gtk/gtk_util.h"    // nogncheck
+#include "ui/linux/linux_ui.h"
+#include "ui/linux/nav_button_provider.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/controls/button/image_button.h"
-#include "ui/views/linux_ui/linux_ui.h"
-#include "ui/views/linux_ui/nav_button_provider.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_buttons.h"
+#include "ui/views/window/window_button_order_provider.h"
 
 namespace electron {
 
@@ -40,26 +42,41 @@ namespace {
 constexpr int kResizeOutsideBorderSize = 10;
 constexpr int kResizeInsideBoundsSize = 5;
 
-}  // namespace
+ui::NavButtonProvider::ButtonState ButtonStateToNavButtonProviderState(
+    views::Button::ButtonState state) {
+  switch (state) {
+    case views::Button::STATE_NORMAL:
+      return ui::NavButtonProvider::ButtonState::kNormal;
+    case views::Button::STATE_HOVERED:
+      return ui::NavButtonProvider::ButtonState::kHovered;
+    case views::Button::STATE_PRESSED:
+      return ui::NavButtonProvider::ButtonState::kPressed;
+    case views::Button::STATE_DISABLED:
+      return ui::NavButtonProvider::ButtonState::kDisabled;
 
-// static
-const char ClientFrameViewLinux::kViewClassName[] = "ClientFrameView";
+    case views::Button::STATE_COUNT:
+    default:
+      NOTREACHED();
+  }
+}
+
+}  // namespace
 
 ClientFrameViewLinux::ClientFrameViewLinux()
     : theme_(ui::NativeTheme::GetInstanceForNativeUi()),
       nav_button_provider_(
-          views::LinuxUI::instance()->CreateNavButtonProvider()),
+          ui::LinuxUiTheme::GetForProfile(nullptr)->CreateNavButtonProvider()),
       nav_buttons_{
-          NavButton{views::NavButtonProvider::FrameButtonDisplayType::kClose,
+          NavButton{ui::NavButtonProvider::FrameButtonDisplayType::kClose,
                     views::FrameButton::kClose, &views::Widget::Close,
                     IDS_APP_ACCNAME_CLOSE, HTCLOSE},
-          NavButton{views::NavButtonProvider::FrameButtonDisplayType::kMaximize,
+          NavButton{ui::NavButtonProvider::FrameButtonDisplayType::kMaximize,
                     views::FrameButton::kMaximize, &views::Widget::Maximize,
                     IDS_APP_ACCNAME_MAXIMIZE, HTMAXBUTTON},
-          NavButton{views::NavButtonProvider::FrameButtonDisplayType::kRestore,
+          NavButton{ui::NavButtonProvider::FrameButtonDisplayType::kRestore,
                     views::FrameButton::kMaximize, &views::Widget::Restore,
                     IDS_APP_ACCNAME_RESTORE, HTMAXBUTTON},
-          NavButton{views::NavButtonProvider::FrameButtonDisplayType::kMinimize,
+          NavButton{ui::NavButtonProvider::FrameButtonDisplayType::kMinimize,
                     views::FrameButton::kMinimize, &views::Widget::Minimize,
                     IDS_APP_ACCNAME_MINIMIZE, HTMINBUTTON},
       },
@@ -83,11 +100,16 @@ ClientFrameViewLinux::ClientFrameViewLinux()
   AddChildView(title_);
 
   native_theme_observer_.Observe(theme_);
-  window_button_order_observer_.Observe(views::LinuxUI::instance());
+
+  if (auto* ui = ui::LinuxUi::instance()) {
+    ui->AddWindowButtonOrderObserver(this);
+    OnWindowButtonOrderingChange();
+  }
 }
 
 ClientFrameViewLinux::~ClientFrameViewLinux() {
-  views::LinuxUI::instance()->RemoveWindowButtonOrderObserver(this);
+  if (auto* ui = ui::LinuxUi::instance())
+    ui->RemoveWindowButtonOrderObserver(this);
   theme_->RemoveObserver(this);
 }
 
@@ -106,9 +128,6 @@ void ClientFrameViewLinux::Init(NativeWindowViews* window,
           window->GetAcceleratedWidget()));
   host_supports_client_frame_shadow_ = tree_host->SupportsClientFrameShadow();
 
-  frame_provider_ = views::LinuxUI::instance()->GetWindowFrameProvider(
-      !host_supports_client_frame_shadow_);
-
   UpdateWindowTitle();
 
   for (auto& button : nav_buttons_) {
@@ -124,12 +143,19 @@ void ClientFrameViewLinux::Init(NativeWindowViews* window,
 }
 
 gfx::Insets ClientFrameViewLinux::GetBorderDecorationInsets() const {
-  return frame_provider_->GetFrameThicknessDip();
+  const auto insets = GetFrameProvider()->GetFrameThicknessDip();
+
+  // We shouldn't draw frame decorations for the tiled edges.
+  // See https://wayland.app/protocols/xdg-shell#xdg_toplevel:enum:state
+  const auto& edges = tiled_edges();
+  return gfx::Insets::TLBR(
+      edges.top ? 0 : insets.top(), edges.left ? 0 : insets.left(),
+      edges.bottom ? 0 : insets.bottom(), edges.right ? 0 : insets.right());
 }
 
 gfx::Insets ClientFrameViewLinux::GetInputInsets() const {
-  return gfx::Insets(
-      host_supports_client_frame_shadow_ ? -kResizeOutsideBorderSize : 0);
+  return gfx::Insets{
+      host_supports_client_frame_shadow_ ? -kResizeOutsideBorderSize : 0};
 }
 
 gfx::Rect ClientFrameViewLinux::GetWindowContentBounds() const {
@@ -159,11 +185,10 @@ void ClientFrameViewLinux::OnNativeThemeUpdated(
   UpdateThemeValues();
 }
 
-void ClientFrameViewLinux::OnWindowButtonOrderingChange(
-    const std::vector<views::FrameButton>& leading_buttons,
-    const std::vector<views::FrameButton>& trailing_buttons) {
-  leading_frame_buttons_ = leading_buttons;
-  trailing_frame_buttons_ = trailing_buttons;
+void ClientFrameViewLinux::OnWindowButtonOrderingChange() {
+  auto* provider = views::WindowButtonOrderProvider::GetInstance();
+  leading_frame_buttons_ = provider->leading_buttons();
+  trailing_frame_buttons_ = provider->trailing_buttons();
 
   InvalidateLayout();
 }
@@ -179,7 +204,7 @@ gfx::Rect ClientFrameViewLinux::GetBoundsForClientView() const {
   if (!frame_->IsFullscreen()) {
     client_bounds.Inset(GetBorderDecorationInsets());
     client_bounds.Inset(
-        gfx::Insets::TLBR(0, GetTitlebarBounds().height(), 0, 0));
+        gfx::Insets::TLBR(GetTitlebarBounds().height(), 0, 0, 0));
   }
   return client_bounds;
 }
@@ -213,6 +238,13 @@ int ClientFrameViewLinux::NonClientHitTest(const gfx::Point& point) {
   return FramelessView::NonClientHitTest(point);
 }
 
+ui::WindowFrameProvider* ClientFrameViewLinux::GetFrameProvider() const {
+  const bool tiled = tiled_edges().top || tiled_edges().left ||
+                     tiled_edges().bottom || tiled_edges().right;
+  return ui::LinuxUiTheme::GetForProfile(nullptr)->GetWindowFrameProvider(
+      !host_supports_client_frame_shadow_, tiled, frame_->IsMaximized());
+}
+
 void ClientFrameViewLinux::GetWindowMask(const gfx::Size& size,
                                          SkPath* window_mask) {
   // Nothing to do here, as transparency is used for decorations, not masks.
@@ -226,8 +258,10 @@ void ClientFrameViewLinux::SizeConstraintsChanged() {
   InvalidateLayout();
 }
 
-gfx::Size ClientFrameViewLinux::CalculatePreferredSize() const {
-  return SizeWithDecorations(FramelessView::CalculatePreferredSize());
+gfx::Size ClientFrameViewLinux::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  return SizeWithDecorations(
+      FramelessView::CalculatePreferredSize(available_size));
 }
 
 gfx::Size ClientFrameViewLinux::GetMinimumSize() const {
@@ -238,8 +272,8 @@ gfx::Size ClientFrameViewLinux::GetMaximumSize() const {
   return SizeWithDecorations(FramelessView::GetMaximumSize());
 }
 
-void ClientFrameViewLinux::Layout() {
-  FramelessView::Layout();
+void ClientFrameViewLinux::Layout(PassKey) {
+  LayoutSuperclass<FramelessView>(this);
 
   if (frame_->IsFullscreen()) {
     // Just hide everything and return.
@@ -264,14 +298,10 @@ void ClientFrameViewLinux::Layout() {
 
 void ClientFrameViewLinux::OnPaint(gfx::Canvas* canvas) {
   if (!frame_->IsFullscreen()) {
-    frame_provider_->PaintWindowFrame(canvas, GetLocalBounds(),
-                                      GetTitlebarBounds().bottom(),
-                                      ShouldPaintAsActive());
+    GetFrameProvider()->PaintWindowFrame(
+        canvas, GetLocalBounds(), GetTitlebarBounds().bottom(),
+        ShouldPaintAsActive(), GetInputInsets());
   }
-}
-
-const char* ClientFrameViewLinux::GetClassName() const {
-  return kViewClassName;
 }
 
 void ClientFrameViewLinux::PaintAsActiveChanged() {
@@ -280,13 +310,13 @@ void ClientFrameViewLinux::PaintAsActiveChanged() {
 
 void ClientFrameViewLinux::UpdateThemeValues() {
   gtk::GtkCssContext window_context =
-      gtk::AppendCssNodeToStyleContext({}, "GtkWindow#window.background.csd");
+      gtk::AppendCssNodeToStyleContext({}, "window.background.csd");
   gtk::GtkCssContext headerbar_context = gtk::AppendCssNodeToStyleContext(
-      {}, "GtkHeaderBar#headerbar.default-decoration.titlebar");
-  gtk::GtkCssContext title_context = gtk::AppendCssNodeToStyleContext(
-      headerbar_context, "GtkLabel#label.title");
+      {}, "headerbar.default-decoration.titlebar");
+  gtk::GtkCssContext title_context =
+      gtk::AppendCssNodeToStyleContext(headerbar_context, "label.title");
   gtk::GtkCssContext button_context = gtk::AppendCssNodeToStyleContext(
-      headerbar_context, "GtkButton#button.image-button");
+      headerbar_context, "button.image-button");
 
   gtk_style_context_set_parent(headerbar_context, window_context);
   gtk_style_context_set_parent(title_context, headerbar_context);
@@ -301,7 +331,8 @@ void ClientFrameViewLinux::UpdateThemeValues() {
     gtk_style_context_set_state(button_context, GTK_STATE_FLAG_BACKDROP);
   }
 
-  theme_values_.window_border_radius = frame_provider_->GetTopCornerRadiusDip();
+  theme_values_.window_border_radius =
+      GetFrameProvider()->GetTopCornerRadiusDip();
 
   gtk::GtkStyleContextGet(headerbar_context, "min-height",
                           &theme_values_.titlebar_min_height, nullptr);
@@ -321,11 +352,11 @@ void ClientFrameViewLinux::UpdateThemeValues() {
   SchedulePaint();
 }
 
-views::NavButtonProvider::FrameButtonDisplayType
+ui::NavButtonProvider::FrameButtonDisplayType
 ClientFrameViewLinux::GetButtonTypeToSkip() const {
   return frame_->IsMaximized()
-             ? views::NavButtonProvider::FrameButtonDisplayType::kMaximize
-             : views::NavButtonProvider::FrameButtonDisplayType::kRestore;
+             ? ui::NavButtonProvider::FrameButtonDisplayType::kMaximize
+             : ui::NavButtonProvider::FrameButtonDisplayType::kRestore;
 }
 
 void ClientFrameViewLinux::UpdateButtonImages() {
@@ -333,7 +364,7 @@ void ClientFrameViewLinux::UpdateButtonImages() {
                                      frame_->IsMaximized(),
                                      ShouldPaintAsActive());
 
-  views::NavButtonProvider::FrameButtonDisplayType skip_type =
+  ui::NavButtonProvider::FrameButtonDisplayType skip_type =
       GetButtonTypeToSkip();
 
   for (NavButton& button : nav_buttons_) {
@@ -345,8 +376,9 @@ void ClientFrameViewLinux::UpdateButtonImages() {
          state_id++) {
       views::Button::ButtonState state =
           static_cast<views::Button::ButtonState>(state_id);
-      button.button->SetImage(
-          state, nav_button_provider_->GetImage(button.type, state));
+      button.button->SetImageModel(
+          state, ui::ImageModel::FromImageSkia(nav_button_provider_->GetImage(
+                     button.type, ButtonStateToNavButtonProviderState(state))));
     }
   }
 }
@@ -364,7 +396,7 @@ void ClientFrameViewLinux::LayoutButtons() {
 void ClientFrameViewLinux::LayoutButtonsOnSide(
     ButtonSide side,
     gfx::Rect* remaining_content_bounds) {
-  views::NavButtonProvider::FrameButtonDisplayType skip_type =
+  ui::NavButtonProvider::FrameButtonDisplayType skip_type =
       GetButtonTypeToSkip();
 
   std::vector<views::FrameButton> frame_buttons;
@@ -377,15 +409,15 @@ void ClientFrameViewLinux::LayoutButtonsOnSide(
       frame_buttons = trailing_frame_buttons_;
       // We always lay buttons out going from the edge towards the center, but
       // they are given to us as left-to-right, so reverse them.
-      std::reverse(frame_buttons.begin(), frame_buttons.end());
+      std::ranges::reverse(frame_buttons);
       break;
     default:
       NOTREACHED();
   }
 
   for (views::FrameButton frame_button : frame_buttons) {
-    auto* button = std::find_if(
-        nav_buttons_.begin(), nav_buttons_.end(), [&](const NavButton& test) {
+    auto* button =
+        std::ranges::find_if(nav_buttons_, [&](const NavButton& test) {
           return test.type != skip_type && test.frame_button == frame_button;
         });
     CHECK(button != nav_buttons_.end())
@@ -425,7 +457,7 @@ void ClientFrameViewLinux::LayoutButtonsOnSide(
 
 gfx::Rect ClientFrameViewLinux::GetTitlebarBounds() const {
   if (frame_->IsFullscreen()) {
-    return gfx::Rect();
+    return {};
   }
 
   int font_height = gfx::FontList().GetHeight();
@@ -460,5 +492,16 @@ gfx::Size ClientFrameViewLinux::SizeWithDecorations(gfx::Size size) const {
   size.Enlarge(decoration_insets.width(), decoration_insets.height());
   return size;
 }
+
+views::View* ClientFrameViewLinux::TargetForRect(views::View* root,
+                                                 const gfx::Rect& rect) {
+  return views::NonClientFrameView::TargetForRect(root, rect);
+}
+
+int ClientFrameViewLinux::GetTranslucentTopAreaHeight() const {
+  return 0;
+}
+
+BEGIN_METADATA(ClientFrameViewLinux) END_METADATA
 
 }  // namespace electron

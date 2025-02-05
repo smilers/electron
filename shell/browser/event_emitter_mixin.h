@@ -5,17 +5,16 @@
 #ifndef ELECTRON_SHELL_BROWSER_EVENT_EMITTER_MIXIN_H_
 #define ELECTRON_SHELL_BROWSER_EVENT_EMITTER_MIXIN_H_
 
+#include <string_view>
 #include <utility>
 
+#include "gin/handle.h"
 #include "gin/object_template_builder.h"
 #include "shell/browser/javascript_environment.h"
+#include "shell/common/gin_helper/event.h"
 #include "shell/common/gin_helper/event_emitter.h"
 
 namespace gin_helper {
-
-namespace internal {
-v8::Local<v8::FunctionTemplate> GetEventEmitterTemplate(v8::Isolate* isolate);
-}  // namespace internal
 
 template <typename T>
 class EventEmitterMixin {
@@ -27,30 +26,27 @@ class EventEmitterMixin {
   // this.emit(name, new Event(), args...);
   // Returns true if event.preventDefault() was called during processing.
   template <typename... Args>
-  bool Emit(base::StringPiece name, Args&&... args) {
+  bool Emit(const std::string_view name, Args&&... args) {
     v8::Isolate* isolate = electron::JavascriptEnvironment::GetIsolate();
-    v8::Locker locker(isolate);
     v8::HandleScope handle_scope(isolate);
     v8::Local<v8::Object> wrapper;
     if (!static_cast<T*>(this)->GetWrapper(isolate).ToLocal(&wrapper))
       return false;
-    v8::Local<v8::Object> event = internal::CreateCustomEvent(isolate, wrapper);
-    return EmitWithEvent(isolate, wrapper, name, event,
-                         std::forward<Args>(args)...);
+    gin::Handle<internal::Event> event = internal::Event::New(isolate);
+    gin_helper::EmitEvent(isolate, wrapper, name, event,
+                          std::forward<Args>(args)...);
+    return event->GetDefaultPrevented();
   }
 
-  // this.emit(name, event, args...);
+  // this.emit(name, args...);
   template <typename... Args>
-  bool EmitCustomEvent(base::StringPiece name,
-                       v8::Local<v8::Object> custom_event,
-                       Args&&... args) {
+  void EmitWithoutEvent(const std::string_view name, Args&&... args) {
     v8::Isolate* isolate = electron::JavascriptEnvironment::GetIsolate();
-    v8::HandleScope scope(isolate);
+    v8::HandleScope handle_scope(isolate);
     v8::Local<v8::Object> wrapper;
     if (!static_cast<T*>(this)->GetWrapper(isolate).ToLocal(&wrapper))
-      return false;
-    return EmitWithEvent(isolate, wrapper, name, custom_event,
-                         std::forward<Args>(args)...);
+      return;
+    gin_helper::EmitEvent(isolate, wrapper, name, std::forward<Args>(args)...);
   }
 
  protected:
@@ -71,25 +67,6 @@ class EventEmitterMixin {
     return gin::ObjectTemplateBuilder(isolate,
                                       static_cast<T*>(this)->GetTypeName(),
                                       constructor->InstanceTemplate());
-  }
-
- private:
-  // this.emit(name, event, args...);
-  template <typename... Args>
-  static bool EmitWithEvent(v8::Isolate* isolate,
-                            v8::Local<v8::Object> wrapper,
-                            base::StringPiece name,
-                            v8::Local<v8::Object> event,
-                            Args&&... args) {
-    auto context = isolate->GetCurrentContext();
-    gin_helper::EmitEvent(isolate, wrapper, name, event,
-                          std::forward<Args>(args)...);
-    v8::Local<v8::Value> defaultPrevented;
-    if (event->Get(context, gin::StringToV8(isolate, "defaultPrevented"))
-            .ToLocal(&defaultPrevented)) {
-      return defaultPrevented->BooleanValue(isolate);
-    }
-    return false;
   }
 };
 

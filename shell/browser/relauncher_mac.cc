@@ -9,16 +9,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "base/apple/osstatus_logging.h"
 #include "base/files/file_util.h"
+#include "base/files/scoped_file.h"
 #include "base/logging.h"
-#include "base/mac/mac_logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/process/launch.h"
-#include "base/strings/sys_string_conversions.h"
 
-namespace relauncher {
-
-namespace internal {
+namespace relauncher::internal {
 
 void RelauncherSynchronizeWithParent() {
   base::ScopedFD relauncher_sync_fd(kRelauncherSyncFD);
@@ -42,7 +40,7 @@ void RelauncherSynchronizeWithParent() {
   }
 
   struct kevent change = {0};
-  EV_SET(&change, parent_pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+  EV_SET(&change, parent_pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, nullptr);
   if (kevent(kq.get(), &change, 1, nullptr, 0, nullptr) == -1) {
     PLOG(ERROR) << "kevent (add)";
     return;
@@ -84,13 +82,11 @@ int LaunchProgram(const StringVector& relauncher_args,
 
   base::LaunchOptions options;
   options.new_process_group = true;  // detach
-  options.fds_to_remap.push_back(std::make_pair(devnull.get(), STDERR_FILENO));
-  options.fds_to_remap.push_back(std::make_pair(devnull.get(), STDOUT_FILENO));
+  options.fds_to_remap.emplace_back(devnull.get(), STDERR_FILENO);
+  options.fds_to_remap.emplace_back(devnull.get(), STDOUT_FILENO);
 
   base::Process process = base::LaunchProcess(argv, options);
   return process.IsValid() ? 0 : 1;
 }
 
-}  // namespace internal
-
-}  // namespace relauncher
+}  // namespace relauncher::internal

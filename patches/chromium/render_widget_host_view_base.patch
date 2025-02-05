@@ -6,11 +6,11 @@ Subject: render_widget_host_view_base.patch
 ... something to do with OSR? and maybe <webview> as well? terrifying.
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_base.cc b/content/browser/renderer_host/render_widget_host_view_base.cc
-index 7d6f0a7f7f65440b7827a2fe01d75998716b1bef..6aaa797b602f7fca7f78026311938c6c88efcfbd 100644
+index 51f836176bf924de5fc26081d8b968f918181947..641a9c7fa68328e868167cf2fcdfec01643fea18 100644
 --- a/content/browser/renderer_host/render_widget_host_view_base.cc
 +++ b/content/browser/renderer_host/render_widget_host_view_base.cc
-@@ -658,6 +658,13 @@ bool RenderWidgetHostViewBase::ScreenRectIsUnstableFor(
-   return false;
+@@ -639,6 +639,13 @@ void RenderWidgetHostViewBase::OnFrameTokenChangedForView(
+     host()->DidProcessFrame(frame_token, activation_time);
  }
  
 +RenderWidgetHostViewBase* RenderWidgetHostViewBase::CreateViewForWidget(
@@ -24,13 +24,14 @@ index 7d6f0a7f7f65440b7827a2fe01d75998716b1bef..6aaa797b602f7fca7f78026311938c6c
      const blink::WebMouseEvent& event,
      const ui::LatencyInfo& latency) {
 diff --git a/content/browser/renderer_host/render_widget_host_view_base.h b/content/browser/renderer_host/render_widget_host_view_base.h
-index a5c773c9a78565230013b6219ec83621980defef..34b6650c766673274f0da3e539bf9a8e71c3d36e 100644
+index 2a2edc6063b49a313fb359e99b39cf608c6233d1..96e6777899154e73661fb17184b9727cce2eb0a3 100644
 --- a/content/browser/renderer_host/render_widget_host_view_base.h
 +++ b/content/browser/renderer_host/render_widget_host_view_base.h
-@@ -26,8 +26,10 @@
+@@ -29,8 +29,11 @@
+ #include "components/viz/common/surfaces/scoped_surface_id_allocator.h"
+ #include "components/viz/common/surfaces/surface_id.h"
  #include "content/browser/renderer_host/display_feature.h"
- #include "content/browser/renderer_host/event_with_latency_info.h"
- #include "content/browser/renderer_host/visible_time_request_trigger.h"
++#include "content/browser/renderer_host/visible_time_request_trigger.h"
 +#include "content/browser/web_contents/web_contents_view.h"
  #include "content/common/content_export.h"
  #include "content/public/browser/render_frame_metadata_provider.h"
@@ -38,19 +39,32 @@ index a5c773c9a78565230013b6219ec83621980defef..34b6650c766673274f0da3e539bf9a8e
  #include "content/public/browser/render_widget_host_view.h"
  #include "content/public/common/page_visibility_state.h"
  #include "content/public/common/widget_type.h"
-@@ -67,9 +69,11 @@ class CursorManager;
+@@ -70,11 +73,13 @@ namespace content {
+ class DevicePosturePlatformProvider;
  class MouseWheelPhaseHandler;
  class RenderWidgetHostImpl;
- class RenderWidgetHostViewBaseObserver;
 +class RenderWidgetHostViewGuest;
- class SyntheticGestureTarget;
+ class ScopedViewTransitionResources;
  class TextInputManager;
  class TouchSelectionControllerClientManager;
-+class WebContentsView;
- class WebCursor;
+ class TouchSelectionControllerInputObserver;
  class WebContentsAccessibility;
++class WebContentsView;
  class DelegatedFrameHost;
-@@ -139,6 +143,9 @@ class CONTENT_EXPORT RenderWidgetHostViewBase : public RenderWidgetHostView {
+ class SyntheticGestureTarget;
+ 
+@@ -145,6 +150,10 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
+   void ProcessGestureEvent(const blink::WebGestureEvent& event,
+                            const ui::LatencyInfo& latency) override;
+   RenderWidgetHostViewBase* GetRootView() override;
++  virtual RenderWidgetHostViewBase* CreateViewForWidget(
++      RenderWidgetHost* render_widget_host,
++      RenderWidgetHost* embedder_render_widget_host,
++      WebContentsView* web_contents_view);
+   void OnAutoscrollStart() override;
+   const viz::DisplayHitTestQueryMap& GetDisplayHitTestQuery() const override;
+ 
+@@ -182,6 +191,9 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
        const gfx::Rect& keyboard_rect) override {}
    bool IsHTMLFormPopup() const override;
  
@@ -60,15 +74,3 @@ index a5c773c9a78565230013b6219ec83621980defef..34b6650c766673274f0da3e539bf9a8e
    // This only needs to be overridden by RenderWidgetHostViewBase subclasses
    // that handle content embedded within other RenderWidgetHostViews.
    gfx::PointF TransformPointToRootCoordSpaceF(
-@@ -290,6 +297,11 @@ class CONTENT_EXPORT RenderWidgetHostViewBase : public RenderWidgetHostView {
-   virtual void ProcessGestureEvent(const blink::WebGestureEvent& event,
-                                    const ui::LatencyInfo& latency);
- 
-+  virtual RenderWidgetHostViewBase* CreateViewForWidget(
-+      RenderWidgetHost* render_widget_host,
-+      RenderWidgetHost* embedder_render_widget_host,
-+      WebContentsView* web_contents_view);
-+
-   // Transform a point that is in the coordinate space of a Surface that is
-   // embedded within the RenderWidgetHostViewBase's Surface to the
-   // coordinate space of an embedding, or embedded, Surface. Typically this

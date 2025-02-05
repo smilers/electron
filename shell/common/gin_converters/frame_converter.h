@@ -5,19 +5,30 @@
 #ifndef ELECTRON_SHELL_COMMON_GIN_CONVERTERS_FRAME_CONVERTER_H_
 #define ELECTRON_SHELL_COMMON_GIN_CONVERTERS_FRAME_CONVERTER_H_
 
+#include "content/public/browser/frame_tree_node_id.h"
 #include "gin/converter.h"
 #include "shell/common/gin_helper/accessor.h"
 
 namespace content {
 class RenderFrameHost;
+
 }
 
 namespace gin {
 
 template <>
+struct Converter<content::FrameTreeNodeId> {
+  static v8::Local<v8::Value> ToV8(v8::Isolate* isolate,
+                                   const content::FrameTreeNodeId& val);
+};
+
+template <>
 struct Converter<content::RenderFrameHost*> {
   static v8::Local<v8::Value> ToV8(v8::Isolate* isolate,
                                    content::RenderFrameHost* val);
+  static bool FromV8(v8::Isolate* isolate,
+                     v8::Local<v8::Value> val,
+                     content::RenderFrameHost** out);
 };
 
 template <>

@@ -6,15 +6,14 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/containers/fixed_flat_map.h"
 #include "base/memory/ptr_util.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/utf_string_conversions.h"
 #include "cc/base/switches.h"
-#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/common/content_switches.h"
@@ -43,20 +42,15 @@ struct Converter<blink::mojom::AutoplayPolicy> {
   static bool FromV8(v8::Isolate* isolate,
                      v8::Local<v8::Value> val,
                      blink::mojom::AutoplayPolicy* out) {
-    std::string policy_str;
-    if (!ConvertFromV8(isolate, val, &policy_str))
-      return false;
-    if (policy_str == "no-user-gesture-required") {
-      *out = blink::mojom::AutoplayPolicy::kNoUserGestureRequired;
-      return true;
-    } else if (policy_str == "user-gesture-required") {
-      *out = blink::mojom::AutoplayPolicy::kUserGestureRequired;
-      return true;
-    } else if (policy_str == "document-user-activation-required") {
-      *out = blink::mojom::AutoplayPolicy::kDocumentUserActivationRequired;
-      return true;
-    }
-    return false;
+    using Val = blink::mojom::AutoplayPolicy;
+    static constexpr auto Lookup =
+        base::MakeFixedFlatMap<std::string_view, Val>({
+            {"document-user-activation-required",
+             Val::kDocumentUserActivationRequired},
+            {"no-user-gesture-required", Val::kNoUserGestureRequired},
+            {"user-gesture-required", Val::kUserGestureRequired},
+        });
+    return FromV8WithLookup(isolate, val, Lookup, out);
   }
 };
 
@@ -65,23 +59,15 @@ struct Converter<blink::mojom::V8CacheOptions> {
   static bool FromV8(v8::Isolate* isolate,
                      v8::Local<v8::Value> val,
                      blink::mojom::V8CacheOptions* out) {
-    std::string v8_cache_options;
-    if (!ConvertFromV8(isolate, val, &v8_cache_options))
-      return false;
-    if (v8_cache_options == "none") {
-      *out = blink::mojom::V8CacheOptions::kNone;
-      return true;
-    } else if (v8_cache_options == "code") {
-      *out = blink::mojom::V8CacheOptions::kCode;
-      return true;
-    } else if (v8_cache_options == "bypassHeatCheck") {
-      *out = blink::mojom::V8CacheOptions::kCodeWithoutHeatCheck;
-      return true;
-    } else if (v8_cache_options == "bypassHeatCheckAndEagerCompile") {
-      *out = blink::mojom::V8CacheOptions::kFullCodeWithoutHeatCheck;
-      return true;
-    }
-    return false;
+    using Val = blink::mojom::V8CacheOptions;
+    static constexpr auto Lookup =
+        base::MakeFixedFlatMap<std::string_view, Val>({
+            {"bypassHeatCheck", Val::kCodeWithoutHeatCheck},
+            {"bypassHeatCheckAndEagerCompile", Val::kFullCodeWithoutHeatCheck},
+            {"code", Val::kCode},
+            {"none", Val::kNone},
+        });
+    return FromV8WithLookup(isolate, val, Lookup, out);
   }
 };
 
@@ -119,8 +105,7 @@ WebContentsPreferences::WebContentsPreferences(
 }
 
 WebContentsPreferences::~WebContentsPreferences() {
-  Instances().erase(std::remove(Instances().begin(), Instances().end(), this),
-                    Instances().end());
+  std::erase(Instances(), this);
 }
 
 void WebContentsPreferences::Clear() {
@@ -131,13 +116,12 @@ void WebContentsPreferences::Clear() {
   node_integration_in_worker_ = false;
   disable_html_fullscreen_window_resize_ = false;
   webview_tag_ = false;
-  sandbox_ = absl::nullopt;
+  sandbox_ = std::nullopt;
   context_isolation_ = true;
   javascript_ = true;
   images_ = true;
   text_areas_are_resizable_ = true;
   webgl_ = true;
-  enable_websql_ = true;
   enable_preferred_size_mode_ = false;
   web_security_ = true;
   allow_running_insecure_content_ = false;
@@ -145,25 +129,26 @@ void WebContentsPreferences::Clear() {
   navigate_on_drag_drop_ = false;
   autoplay_policy_ = blink::mojom::AutoplayPolicy::kNoUserGestureRequired;
   default_font_family_.clear();
-  default_font_size_ = absl::nullopt;
-  default_monospace_font_size_ = absl::nullopt;
-  minimum_font_size_ = absl::nullopt;
-  default_encoding_ = absl::nullopt;
+  default_font_size_ = std::nullopt;
+  default_monospace_font_size_ = std::nullopt;
+  minimum_font_size_ = std::nullopt;
+  default_encoding_ = std::nullopt;
   is_webview_ = false;
   custom_args_.clear();
   custom_switches_.clear();
-  enable_blink_features_ = absl::nullopt;
-  disable_blink_features_ = absl::nullopt;
+  enable_blink_features_ = std::nullopt;
+  disable_blink_features_ = std::nullopt;
   disable_popups_ = false;
   disable_dialogs_ = false;
   safe_dialogs_ = false;
-  safe_dialogs_message_ = absl::nullopt;
+  safe_dialogs_message_ = std::nullopt;
   ignore_menu_shortcuts_ = false;
-  background_color_ = absl::nullopt;
+  background_color_ = std::nullopt;
   image_animation_policy_ =
       blink::mojom::ImageAnimationPolicy::kImageAnimationPolicyAllowed;
-  preload_path_ = absl::nullopt;
+  preload_path_ = std::nullopt;
   v8_cache_options_ = blink::mojom::V8CacheOptions::kDefault;
+  deprecated_paste_enabled_ = false;
 
 #if BUILDFLAG(IS_MAC)
   scroll_bounce_ = false;
@@ -176,11 +161,7 @@ void WebContentsPreferences::Clear() {
 void WebContentsPreferences::SetFromDictionary(
     const gin_helper::Dictionary& web_preferences) {
   Clear();
-  Merge(web_preferences);
-}
 
-void WebContentsPreferences::Merge(
-    const gin_helper::Dictionary& web_preferences) {
   web_preferences.Get(options::kPlugins, &plugins_);
   web_preferences.Get(options::kExperimentalFeatures, &experimental_features_);
   web_preferences.Get(options::kNodeIntegration, &node_integration_);
@@ -200,7 +181,6 @@ void WebContentsPreferences::Merge(
   web_preferences.Get(options::kTextAreasAreResizable,
                       &text_areas_are_resizable_);
   web_preferences.Get(options::kWebGL, &webgl_);
-  web_preferences.Get(options::kEnableWebSQL, &enable_websql_);
   web_preferences.Get(options::kEnablePreferredSizeMode,
                       &enable_preferred_size_mode_);
   web_preferences.Get(options::kWebSecurity, &web_security_);
@@ -230,7 +210,7 @@ void WebContentsPreferences::Merge(
   // preferences don't save a transparency option,
   // apply any existing transparency setting to background_color_
   bool transparent;
-  if (web_preferences.Get(options::kTransparent, &transparent)) {
+  if (web_preferences.Get(options::kTransparent, &transparent) && transparent) {
     background_color_ = SK_ColorTRANSPARENT;
   }
   std::string background_color;
@@ -250,7 +230,6 @@ void WebContentsPreferences::Merge(
     disable_blink_features_ = disable_blink_features;
 
   base::FilePath::StringType preload_path;
-  std::string preload_url_str;
   if (web_preferences.Get(options::kPreloadScript, &preload_path)) {
     base::FilePath preload(preload_path);
     if (preload.IsAbsolute()) {
@@ -267,6 +246,9 @@ void WebContentsPreferences::Merge(
 
   web_preferences.Get("v8CacheOptions", &v8_cache_options_);
 
+  web_preferences.Get(options::kEnableDeprecatedPaste,
+                      &deprecated_paste_enabled_);
+
 #if BUILDFLAG(IS_MAC)
   web_preferences.Get(options::kScrollBounce, &scroll_bounce_);
 #endif
@@ -276,14 +258,6 @@ void WebContentsPreferences::Merge(
 #endif
 
   SaveLastPreferences();
-}
-
-bool WebContentsPreferences::GetSafeDialogsMessage(std::string* message) const {
-  if (safe_dialogs_message_) {
-    *message = *safe_dialogs_message_;
-    return true;
-  }
-  return false;
 }
 
 bool WebContentsPreferences::SetImageAnimationPolicy(std::string policy) {
@@ -303,31 +277,21 @@ bool WebContentsPreferences::SetImageAnimationPolicy(std::string policy) {
   return false;
 }
 
-bool WebContentsPreferences::GetPreloadPath(base::FilePath* path) const {
-  DCHECK(path);
-  if (preload_path_) {
-    *path = *preload_path_;
-    return true;
-  }
-  return false;
-}
-
 bool WebContentsPreferences::IsSandboxed() const {
   if (sandbox_)
     return *sandbox_;
   bool sandbox_disabled_by_default =
-      node_integration_ || node_integration_in_worker_ || preload_path_ ||
-      !SessionPreferences::GetValidPreloads(web_contents_->GetBrowserContext())
-           .empty();
+      node_integration_ || node_integration_in_worker_;
   return !sandbox_disabled_by_default;
 }
 
 // static
 content::WebContents* WebContentsPreferences::GetWebContentsFromProcessID(
-    int process_id) {
+    content::ChildProcessId process_id) {
   for (WebContentsPreferences* preferences : Instances()) {
     content::WebContents* web_contents = preferences->web_contents_;
-    if (web_contents->GetMainFrame()->GetProcess()->GetID() == process_id)
+    if (web_contents->GetPrimaryMainFrame()->GetProcess()->GetID() ==
+        process_id)
       return web_contents;
   }
   return nullptr;
@@ -388,44 +352,46 @@ void WebContentsPreferences::AppendCommandLineSwitches(
 
   // We are appending args to a webContents so let's save the current state
   // of our preferences object so that during the lifetime of the WebContents
-  // we can fetch the options used to initally configure the WebContents
+  // we can fetch the options used to initially configure the WebContents
   // last_preference_ = preference_.Clone();
   SaveLastPreferences();
 }
 
 void WebContentsPreferences::SaveLastPreferences() {
-  last_web_preferences_ = base::Value(base::Value::Type::DICTIONARY);
-  last_web_preferences_.SetKey(options::kNodeIntegration,
-                               base::Value(node_integration_));
-  last_web_preferences_.SetKey(options::kNodeIntegrationInSubFrames,
-                               base::Value(node_integration_in_sub_frames_));
-  last_web_preferences_.SetKey(options::kSandbox, base::Value(IsSandboxed()));
-  last_web_preferences_.SetKey(options::kContextIsolation,
-                               base::Value(context_isolation_));
-  last_web_preferences_.SetKey(options::kJavaScript, base::Value(javascript_));
-  last_web_preferences_.SetKey(options::kEnableWebSQL,
-                               base::Value(enable_websql_));
-  last_web_preferences_.SetKey(options::kWebviewTag, base::Value(webview_tag_));
-  last_web_preferences_.SetKey("disablePopups", base::Value(disable_popups_));
-  last_web_preferences_.SetKey(options::kWebSecurity,
-                               base::Value(web_security_));
-  last_web_preferences_.SetKey(options::kAllowRunningInsecureContent,
-                               base::Value(allow_running_insecure_content_));
-  last_web_preferences_.SetKey(options::kExperimentalFeatures,
-                               base::Value(experimental_features_));
-  last_web_preferences_.SetKey(
-      options::kEnableBlinkFeatures,
-      base::Value(enable_blink_features_.value_or("")));
+  base::Value::Dict dict;
+  dict.Set(options::kNodeIntegration, node_integration_);
+  dict.Set(options::kNodeIntegrationInSubFrames,
+           node_integration_in_sub_frames_);
+  dict.Set(options::kSandbox, IsSandboxed());
+  dict.Set(options::kContextIsolation, context_isolation_);
+  dict.Set(options::kJavaScript, javascript_);
+  dict.Set(options::kWebviewTag, webview_tag_);
+  dict.Set("disablePopups", disable_popups_);
+  dict.Set(options::kWebSecurity, web_security_);
+  dict.Set(options::kAllowRunningInsecureContent,
+           allow_running_insecure_content_);
+  dict.Set(options::kExperimentalFeatures, experimental_features_);
+  dict.Set(options::kEnableBlinkFeatures, enable_blink_features_.value_or(""));
+  dict.Set("disableDialogs", disable_dialogs_);
+  dict.Set("safeDialogs", safe_dialogs_);
+  dict.Set("safeDialogsMessage", safe_dialogs_message_.value_or(""));
+
+  last_web_preferences_ = base::Value(std::move(dict));
 }
 
 void WebContentsPreferences::OverrideWebkitPrefs(
-    blink::web_pref::WebPreferences* prefs) {
+    blink::web_pref::WebPreferences* prefs,
+    blink::RendererPreferences* renderer_prefs) {
   prefs->javascript_enabled = javascript_;
   prefs->images_enabled = images_;
   prefs->animation_policy = image_animation_policy_;
   prefs->text_areas_are_resizable = text_areas_are_resizable_;
-  prefs->navigate_on_drag_drop = navigate_on_drag_drop_;
   prefs->autoplay_policy = autoplay_policy_;
+
+  // TODO: navigate_on_drag_drop was removed from web prefs in favor of the
+  // equivalent option in renderer prefs. this option should be deprecated from
+  // our API and then removed here.
+  renderer_prefs->can_accept_load_drops = navigate_on_drag_drop_;
 
   // Check if webgl should be enabled.
   prefs->webgl1_enabled = webgl_;
@@ -435,24 +401,36 @@ void WebContentsPreferences::OverrideWebkitPrefs(
   prefs->web_security_enabled = web_security_;
   prefs->allow_running_insecure_content = allow_running_insecure_content_;
 
-  if (auto font =
-          default_font_family_.find("standard") != default_font_family_.end())
-    prefs->standard_font_family_map[blink::web_pref::kCommonScript] = font;
-  if (auto font =
-          default_font_family_.find("serif") != default_font_family_.end())
-    prefs->serif_font_family_map[blink::web_pref::kCommonScript] = font;
-  if (auto font =
-          default_font_family_.find("sansSerif") != default_font_family_.end())
-    prefs->sans_serif_font_family_map[blink::web_pref::kCommonScript] = font;
-  if (auto font =
-          default_font_family_.find("monospace") != default_font_family_.end())
-    prefs->fixed_font_family_map[blink::web_pref::kCommonScript] = font;
-  if (auto font =
-          default_font_family_.find("cursive") != default_font_family_.end())
-    prefs->cursive_font_family_map[blink::web_pref::kCommonScript] = font;
-  if (auto font =
-          default_font_family_.find("fantasy") != default_font_family_.end())
-    prefs->fantasy_font_family_map[blink::web_pref::kCommonScript] = font;
+  if (!default_font_family_.empty()) {
+    if (auto iter = default_font_family_.find("standard");
+        iter != default_font_family_.end())
+      prefs->standard_font_family_map[blink::web_pref::kCommonScript] =
+          iter->second;
+    if (auto iter = default_font_family_.find("serif");
+        iter != default_font_family_.end())
+      prefs->serif_font_family_map[blink::web_pref::kCommonScript] =
+          iter->second;
+    if (auto iter = default_font_family_.find("sansSerif");
+        iter != default_font_family_.end())
+      prefs->sans_serif_font_family_map[blink::web_pref::kCommonScript] =
+          iter->second;
+    if (auto iter = default_font_family_.find("monospace");
+        iter != default_font_family_.end())
+      prefs->fixed_font_family_map[blink::web_pref::kCommonScript] =
+          iter->second;
+    if (auto iter = default_font_family_.find("cursive");
+        iter != default_font_family_.end())
+      prefs->cursive_font_family_map[blink::web_pref::kCommonScript] =
+          iter->second;
+    if (auto iter = default_font_family_.find("fantasy");
+        iter != default_font_family_.end())
+      prefs->fantasy_font_family_map[blink::web_pref::kCommonScript] =
+          iter->second;
+    if (auto iter = default_font_family_.find("math");
+        iter != default_font_family_.end())
+      prefs->math_font_family_map[blink::web_pref::kCommonScript] =
+          iter->second;
+  }
 
   if (default_font_size_)
     prefs->default_font_size = *default_font_size_;
@@ -486,10 +464,6 @@ void WebContentsPreferences::OverrideWebkitPrefs(
 
   prefs->offscreen = offscreen_;
 
-  // The preload script.
-  if (preload_path_)
-    prefs->preload = *preload_path_;
-
   prefs->node_integration = node_integration_;
   prefs->node_integration_in_worker = node_integration_in_worker_;
   prefs->node_integration_in_sub_frames = node_integration_in_sub_frames_;
@@ -500,9 +474,10 @@ void WebContentsPreferences::OverrideWebkitPrefs(
 
   prefs->enable_plugins = plugins_;
   prefs->webview_tag = webview_tag_;
-  prefs->enable_websql = enable_websql_;
 
   prefs->v8_cache_options = v8_cache_options_;
+
+  prefs->dom_paste_enabled = deprecated_paste_enabled_;
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(WebContentsPreferences);

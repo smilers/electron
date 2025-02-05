@@ -7,13 +7,11 @@ This allows Electron to override `acceptsFirstMouse` on Mac so that windows can
 respond to the first mouse click in their window, which is desirable for some
 kinds of utility windows. Similarly for `disableAutoHideCursor`.
 
-Additionally, disables usage of some private APIs in MAS builds.
-
 diff --git a/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm b/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
-index 1393c9c8382dd405edd9a5515210176395a98fe5..38bd45e0ca66af9f78bb532e411db66dc8d9d5da 100644
+index fc345ea0ae7a640b7d32cd12e177a4ce020d3b06..038646bfa3ac442c64380a81bdb1d3043e50c107 100644
 --- a/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
 +++ b/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
-@@ -154,6 +154,15 @@ void ExtractUnderlines(NSAttributedString* string,
+@@ -169,6 +169,15 @@ void ExtractUnderlines(NSAttributedString* string,
  
  }  // namespace
  
@@ -26,20 +24,20 @@ index 1393c9c8382dd405edd9a5515210176395a98fe5..38bd45e0ca66af9f78bb532e411db66d
 +- (BOOL)shouldIgnoreMouseEvent;
 +@end
 +
- // These are not documented, so use only after checking -respondsToSelector:.
- @interface NSApplication (UndocumentedSpeechMethods)
- - (void)speakString:(NSString*)string;
-@@ -610,6 +619,9 @@ - (BOOL)acceptsMouseEventsWhenInactive {
+ // RenderWidgetHostViewCocoa ---------------------------------------------------
+ 
+ // Private methods:
+@@ -786,6 +795,9 @@ - (AcceptMouseEventsOption)acceptsMouseEventsOption {
  }
  
  - (BOOL)acceptsFirstMouse:(NSEvent*)theEvent {
 +  if ([self.window respondsToSelector:@selector(acceptsFirstMouse)] &&
 +      [self.window acceptsFirstMouse])
 +    return YES;
-   return [self acceptsMouseEventsWhenInactive];
+   // Enable "click-through" if mouse clicks are accepted in inactive windows
+   return [self acceptsMouseEventsOption] > kAcceptMouseEventsInActiveWindow;
  }
- 
-@@ -686,6 +698,10 @@ - (BOOL)shouldIgnoreMouseEvent:(NSEvent*)theEvent {
+@@ -880,6 +892,10 @@ - (BOOL)shouldIgnoreMouseEvent:(NSEvent*)theEvent {
    // its parent view.
    BOOL hitSelf = NO;
    while (view) {
@@ -50,38 +48,14 @@ index 1393c9c8382dd405edd9a5515210176395a98fe5..38bd45e0ca66af9f78bb532e411db66d
      if (view == self)
        hitSelf = YES;
      if ([view isKindOfClass:[self class]] && ![view isEqual:self] &&
-@@ -1005,6 +1021,10 @@ - (void)keyEvent:(NSEvent*)theEvent wasKeyEquivalent:(BOOL)equiv {
-                               eventType == NSKeyDown &&
-                               !(modifierFlags & NSCommandKeyMask);
+@@ -1202,6 +1218,10 @@ - (void)keyEvent:(NSEvent*)theEvent wasKeyEquivalent:(BOOL)equiv {
+                               eventType == NSEventTypeKeyDown &&
+                               !(modifierFlags & NSEventModifierFlagCommand);
  
 +  if ([theEvent.window respondsToSelector:@selector(disableAutoHideCursor)] &&
 +      [theEvent.window disableAutoHideCursor])
 +    shouldAutohideCursor = NO;
 +
    // We only handle key down events and just simply forward other events.
-   if (eventType != NSKeyDown) {
-     _hostHelper->ForwardKeyboardEvent(event, latency_info);
-@@ -1751,9 +1771,11 @@ - (NSAccessibilityRole)accessibilityRole {
- // Since this implementation doesn't have to wait any IPC calls, this doesn't
- // make any key-typing jank. --hbono 7/23/09
- //
-+#ifndef MAS_BUILD
- extern "C" {
- extern NSString* NSTextInputReplacementRangeAttributeName;
- }
-+#endif
- 
- - (NSArray*)validAttributesForMarkedText {
-   // This code is just copied from WebKit except renaming variables.
-@@ -1762,7 +1784,10 @@ - (NSArray*)validAttributesForMarkedText {
-         initWithObjects:NSUnderlineStyleAttributeName,
-                         NSUnderlineColorAttributeName,
-                         NSMarkedClauseSegmentAttributeName,
--                        NSTextInputReplacementRangeAttributeName, nil]);
-+#ifndef MAS_BUILD
-+                        NSTextInputReplacementRangeAttributeName,
-+#endif
-+                        nil]);
-   }
-   return _validAttributesForMarkedText.get();
- }
+   if (eventType != NSEventTypeKeyDown) {
+     _hostHelper->ForwardKeyboardEvent(event, latencyInfo);

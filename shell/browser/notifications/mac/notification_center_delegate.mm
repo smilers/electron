@@ -7,8 +7,14 @@
 #include <string>
 
 #include "base/logging.h"
+#include "electron/mas.h"
 #include "shell/browser/notifications/mac/cocoa_notification.h"
 #include "shell/browser/notifications/mac/notification_presenter_mac.h"
+
+// NSUserNotification is deprecated; we need to use the
+// UserNotifications.frameworks API instead
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 @implementation NotificationCenterDelegate
 
@@ -33,7 +39,7 @@
        didActivateNotification:(NSUserNotification*)notif {
   auto* notification = presenter_->GetNotification(notif);
 
-  if (getenv("ELECTRON_DEBUG_NOTIFICATIONS")) {
+  if (electron::debug_notifications) {
     LOG(INFO) << "Notification activated (" << [notif.identifier UTF8String]
               << ")";
   }
@@ -65,7 +71,7 @@
   return YES;
 }
 
-#if !defined(MAS_BUILD)
+#if !IS_MAS_BUILD()
 // This undocumented method notifies us if a user closes "Alert" notifications
 // https://chromium.googlesource.com/chromium/src/+/lkgr/chrome/browser/notifications/notification_platform_bridge_mac.mm
 - (void)userNotificationCenter:(NSUserNotificationCenter*)center
@@ -76,7 +82,7 @@
 }
 #endif
 
-#if !defined(MAS_BUILD)
+#if !IS_MAS_BUILD()
 // This undocumented method notifies us if a user closes "Banner" notifications
 // https://github.com/mozilla/gecko-dev/blob/master/widget/cocoa/OSXNotificationCenter.mm
 - (void)userNotificationCenter:(NSUserNotificationCenter*)center

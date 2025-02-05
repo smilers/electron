@@ -19,7 +19,7 @@
 
 using TitleBarStyle = electron::NativeWindowMac::TitleBarStyle;
 using FullScreenTransitionState =
-    electron::NativeWindowMac::FullScreenTransitionState;
+    electron::NativeWindow::FullScreenTransitionState;
 
 @implementation ElectronNSWindowDelegate
 
@@ -51,10 +51,22 @@ using FullScreenTransitionState =
 
   // check occlusion binary flag
   if (window.occlusionState & NSWindowOcclusionStateVisible) {
-    // The app is visible
+    // There's a macOS bug where if a child window is minimized, and then both
+    // windows are restored via activation of the parent window, the child
+    // window is not properly deminiaturized. This causes traffic light bugs
+    // like the close and miniaturize buttons having no effect. We need to call
+    // deminiaturize on the child window to fix this. Unfortunately, this also
+    // hits ANOTHER bug where even after calling deminiaturize,
+    // windowDidDeminiaturize is not posted on the child window if it was
+    // incidentally restored by the parent, so we need to manually reset
+    // is_minimized_ here.
+    if (shell_->parent() && is_minimized_) {
+      shell_->Restore();
+      is_minimized_ = false;
+    }
+
     shell_->NotifyWindowShow();
   } else {
-    // The app is not visible
     shell_->NotifyWindowHide();
   }
 }
@@ -64,13 +76,13 @@ using FullScreenTransitionState =
 - (NSRect)windowWillUseStandardFrame:(NSWindow*)window
                         defaultFrame:(NSRect)frame {
   if (!shell_->zoom_to_page_width()) {
-    if (shell_->GetAspectRatio() > 0.0)
+    if (shell_->aspect_ratio() > 0.0)
       shell_->set_default_frame_for_zoom(frame);
     return frame;
   }
 
   // If the shift key is down, maximize.
-  if ([[NSApp currentEvent] modifierFlags] & NSShiftKeyMask)
+  if ([[NSApp currentEvent] modifierFlags] & NSEventModifierFlagShift)
     return frame;
 
   // Get preferred width from observers. Usually the page width.
@@ -92,7 +104,7 @@ using FullScreenTransitionState =
   // Set the width. Don't touch y or height.
   frame.size.width = zoomed_width;
 
-  if (shell_->GetAspectRatio() > 0.0)
+  if (shell_->aspect_ratio() > 0.0)
     shell_->set_default_frame_for_zoom(frame);
 
   return frame;
@@ -127,17 +139,17 @@ using FullScreenTransitionState =
 
 - (NSSize)windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize {
   NSSize newSize = frameSize;
-  double aspectRatio = shell_->GetAspectRatio();
+  NSWindow* window = shell_->GetNativeWindow().GetNativeNSWindow();
 
-  if (aspectRatio > 0.0) {
-    gfx::Size windowSize = shell_->GetSize();
-    gfx::Size contentSize = shell_->GetContentSize();
-    gfx::Size extraSize = shell_->GetAspectRatioExtraSize();
+  if (const double aspectRatio = shell_->aspect_ratio(); aspectRatio > 0.0) {
+    const gfx::Size windowSize = shell_->GetSize();
+    const gfx::Size contentSize = shell_->GetContentSize();
+    const gfx::Size extraSize = shell_->aspect_ratio_extra_size();
 
+    double titleBarHeight = windowSize.height() - contentSize.height();
     double extraWidthPlusFrame =
         windowSize.width() - contentSize.width() + extraSize.width();
-    double extraHeightPlusFrame =
-        windowSize.height() - contentSize.height() + extraSize.height();
+    double extraHeightPlusFrame = titleBarHeight + extraSize.height();
 
     newSize.width =
         roundf((frameSize.height - extraHeightPlusFrame) * aspectRatio +
@@ -145,10 +157,44 @@ using FullScreenTransitionState =
     newSize.height =
         roundf((newSize.width - extraWidthPlusFrame) / aspectRatio +
                extraHeightPlusFrame);
+
+    // Clamp to minimum width/height while ensuring aspect ratio remains.
+    NSSize minSize = [window minSize];
+    NSSize zeroSize =
+        shell_->has_frame() ? NSMakeSize(0, titleBarHeight) : NSZeroSize;
+    if (!NSEqualSizes(minSize, zeroSize)) {
+      double minWidthForAspectRatio =
+          (minSize.height - titleBarHeight) * aspectRatio;
+      bool atMinHeight =
+          minSize.height > zeroSize.height && newSize.height <= minSize.height;
+      newSize.width = atMinHeight ? minWidthForAspectRatio
+                                  : std::max(newSize.width, minSize.width);
+
+      double minHeightForAspectRatio = minSize.width / aspectRatio;
+      bool atMinWidth =
+          minSize.width > zeroSize.width && newSize.width <= minSize.width;
+      newSize.height = atMinWidth ? minHeightForAspectRatio
+                                  : std::max(newSize.height, minSize.height);
+    }
+
+    // Clamp to maximum width/height while ensuring aspect ratio remains.
+    NSSize maxSize = [window maxSize];
+    if (!NSEqualSizes(maxSize, NSMakeSize(FLT_MAX, FLT_MAX))) {
+      double maxWidthForAspectRatio = maxSize.height * aspectRatio;
+      bool atMaxHeight =
+          maxSize.height < FLT_MAX && newSize.height >= maxSize.height;
+      newSize.width = atMaxHeight ? maxWidthForAspectRatio
+                                  : std::min(newSize.width, maxSize.width);
+
+      double maxHeightForAspectRatio = maxSize.width / aspectRatio;
+      bool atMaxWidth =
+          maxSize.width < FLT_MAX && newSize.width >= maxSize.width;
+      newSize.height = atMaxWidth ? maxHeightForAspectRatio
+                                  : std::min(newSize.height, maxSize.height);
+    }
   }
 
   if (!resizingHorizontally_) {
-    NSWindow* window = shell_->GetNativeWindow().GetNativeNSWindow();
     const auto widthDelta = frameSize.width - [window frame].size.width;
     const auto heightDelta = frameSize.height - [window frame].size.height;
     resizingHorizontally_ = std::abs(widthDelta) > std::abs(heightDelta);
@@ -203,15 +249,24 @@ using FullScreenTransitionState =
   // windowDidDeminiaturize
   level_ = [window level];
   shell_->SetWindowLevel(NSNormalWindowLevel);
+  shell_->UpdateWindowOriginalFrame();
+  shell_->DetachChildren();
 }
 
 - (void)windowDidMiniaturize:(NSNotification*)notification {
   [super windowDidMiniaturize:notification];
+  is_minimized_ = true;
+
+  shell_->set_wants_to_be_visible(false);
   shell_->NotifyWindowMinimize();
 }
 
 - (void)windowDidDeminiaturize:(NSNotification*)notification {
   [super windowDidDeminiaturize:notification];
+  is_minimized_ = false;
+
+  shell_->set_wants_to_be_visible(true);
+  shell_->AttachChildren();
   shell_->SetWindowLevel(level_);
   shell_->NotifyWindowRestore();
 }
@@ -234,34 +289,54 @@ using FullScreenTransitionState =
 }
 
 - (void)windowWillEnterFullScreen:(NSNotification*)notification {
-  shell_->SetFullScreenTransitionState(FullScreenTransitionState::ENTERING);
+  // Store resizable mask so it can be restored after exiting fullscreen.
+  is_resizable_ = shell_->HasStyleMask(NSWindowStyleMaskResizable);
+
+  shell_->set_fullscreen_transition_state(FullScreenTransitionState::kEntering);
 
   shell_->NotifyWindowWillEnterFullScreen();
 
-  // Setting resizable to true before entering fullscreen.
-  is_resizable_ = shell_->IsResizable();
+  // Set resizable to true before entering fullscreen.
   shell_->SetResizable(true);
 }
 
 - (void)windowDidEnterFullScreen:(NSNotification*)notification {
-  shell_->SetFullScreenTransitionState(FullScreenTransitionState::NONE);
+  shell_->set_fullscreen_transition_state(FullScreenTransitionState::kNone);
 
   shell_->NotifyWindowEnterFullScreen();
+
+  if (shell_->HandleDeferredClose())
+    return;
+
+  shell_->HandlePendingFullscreenTransitions();
+}
+
+- (void)windowDidFailToEnterFullScreen:(NSWindow*)window {
+  shell_->set_fullscreen_transition_state(FullScreenTransitionState::kNone);
+
+  shell_->SetResizable(is_resizable_);
+  shell_->NotifyWindowDidFailToEnterFullScreen();
+
+  if (shell_->HandleDeferredClose())
+    return;
 
   shell_->HandlePendingFullscreenTransitions();
 }
 
 - (void)windowWillExitFullScreen:(NSNotification*)notification {
-  shell_->SetFullScreenTransitionState(FullScreenTransitionState::EXITING);
+  shell_->set_fullscreen_transition_state(FullScreenTransitionState::kExiting);
 
   shell_->NotifyWindowWillLeaveFullScreen();
 }
 
 - (void)windowDidExitFullScreen:(NSNotification*)notification {
-  shell_->SetFullScreenTransitionState(FullScreenTransitionState::NONE);
+  shell_->set_fullscreen_transition_state(FullScreenTransitionState::kNone);
 
   shell_->SetResizable(is_resizable_);
   shell_->NotifyWindowLeaveFullScreen();
+
+  if (shell_->HandleDeferredClose())
+    return;
 
   shell_->HandlePendingFullscreenTransitions();
 }
@@ -277,10 +352,10 @@ using FullScreenTransitionState =
   if (shell_->is_modal() && shell_->parent() && shell_->IsVisible()) {
     NSWindow* window = shell_->GetNativeWindow().GetNativeNSWindow();
     NSWindow* sheetParent = [window sheetParent];
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(base::RetainBlock(^{
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(^{
           [sheetParent endSheet:window];
-        })));
+        }));
   }
 
   // Clears the delegate when window is going to be closed, since EL Capitan it
@@ -290,6 +365,19 @@ using FullScreenTransitionState =
       shell_->GetNativeWindow());
   auto* bridged_view = bridge_host->GetInProcessNSWindowBridge();
   bridged_view->OnWindowWillClose();
+
+  // Native widget and its compositor have been destroyed upon close. We need
+  // to detach contents view in order to prevent reusing its layer without
+  // compositor in the `WebContentsViewMac::CreateViewForWidget`, leading to
+  // `DCHECK` failure in `BrowserCompositorMac::SetParentUiLayer`.
+  auto* contents_view =
+      static_cast<views::WidgetDelegate*>(shell_)->GetContentsView();
+  if (contents_view) {
+    auto* parent = contents_view->parent();
+    if (parent) {
+      parent->RemoveChildView(contents_view);
+    }
+  }
 }
 
 - (BOOL)windowShouldClose:(id)window {
@@ -323,8 +411,7 @@ using FullScreenTransitionState =
 #pragma mark - NSTouchBarDelegate
 
 - (NSTouchBarItem*)touchBar:(NSTouchBar*)touchBar
-      makeItemForIdentifier:(NSTouchBarItemIdentifier)identifier
-    API_AVAILABLE(macosx(10.12.2)) {
+      makeItemForIdentifier:(NSTouchBarItemIdentifier)identifier {
   if (touchBar && shell_->touch_bar())
     return [shell_->touch_bar() makeItemForIdentifier:identifier];
   else

@@ -1,21 +1,24 @@
-const cp = require('child_process');
-const fs = require('fs');
-const path = require('path');
+const minimist = require('minimist');
 
-const args = require('minimist')(process.argv.slice(2), {
-  boolean: ['default'],
+const cp = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const utils = require('./lib/utils');
+const DISABLED_TESTS = require('./node-disabled-tests.json');
+
+const args = minimist(process.argv.slice(2), {
+  boolean: ['default', 'validateDisabled'],
   string: ['jUnitDir']
 });
 
 const BASE = path.resolve(__dirname, '../..');
-const DISABLED_TESTS = require('./node-disabled-tests.json');
+
 const NODE_DIR = path.resolve(BASE, 'third_party', 'electron_node');
 const JUNIT_DIR = args.jUnitDir ? path.resolve(args.jUnitDir) : null;
 const TAP_FILE_NAME = 'test.tap';
 
-const utils = require('./lib/utils');
-
-if (!process.mainModule) {
+if (!require.main) {
   throw new Error('Must call the node spec runner directly');
 }
 
@@ -28,6 +31,8 @@ const defaultOptions = [
   '--mode=debug',
   'default',
   `--skip-tests=${DISABLED_TESTS.join(',')}`,
+  '--flaky-tests=dontcare',
+  '--measure-flakiness=9',
   '--shell',
   utils.getAbsoluteElectronExec(),
   '-J'
@@ -42,8 +47,7 @@ const getCustomOptions = () => {
     customOptions = customOptions.concat(extra);
   }
 
-  // We need this unilaterally or Node.js will try
-  // to run from out/Release/node.
+  // Necessary or Node.js will try to run from out/Release/node.
   customOptions = customOptions.concat([
     '--shell',
     utils.getAbsoluteElectronExec()
@@ -53,9 +57,28 @@ const getCustomOptions = () => {
 };
 
 async function main () {
+  // Optionally validate that all disabled specs still exist.
+  if (args.validateDisabled) {
+    const missing = [];
+    for (const test of DISABLED_TESTS) {
+      const js = path.join(NODE_DIR, 'test', `${test}.js`);
+      const mjs = path.join(NODE_DIR, 'test', `${test}.mjs`);
+      if (!fs.existsSync(js) && !fs.existsSync(mjs)) {
+        missing.push(test);
+      }
+    }
+
+    if (missing.length > 0) {
+      console.error(`Found ${missing.length} missing disabled specs: \n${missing.join('\n')}`);
+      process.exit(1);
+    }
+
+    process.exit(0);
+  }
+
   const options = args.default ? defaultOptions : getCustomOptions();
 
-  const testChild = cp.spawn('python', options, {
+  const testChild = cp.spawn('python3', options, {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: 'true',

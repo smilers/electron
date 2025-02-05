@@ -8,20 +8,18 @@
 
 #include <commctrl.h>
 
-#include <map>
 #include <vector>
 
 #include "base/containers/contains.h"
+#include "base/containers/flat_map.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
-#include "base/task/post_task.h"
 #include "base/win/scoped_gdi_object.h"
 #include "shell/browser/browser.h"
 #include "shell/browser/native_window_views.h"
 #include "shell/browser/ui/win/dialog_thread.h"
-#include "shell/browser/unresponsive_suppressor.h"
 #include "ui/gfx/icon_util.h"
 #include "ui/gfx/image/image_skia.h"
 
@@ -43,8 +41,8 @@ struct DialogResult {
 // Note that the HWND is stored in a unique_ptr, because the pointer of HWND
 // will be passed between threads and we need to ensure the memory of HWND is
 // not changed while dialogs map is modified.
-std::map<int, std::unique_ptr<HWND>>& GetDialogsMap() {
-  static base::NoDestructor<std::map<int, std::unique_ptr<HWND>>> dialogs;
+base::flat_map<int, std::unique_ptr<HWND>>& GetDialogsMap() {
+  static base::NoDestructor<base::flat_map<int, std::unique_ptr<HWND>>> dialogs;
   return *dialogs;
 }
 
@@ -97,7 +95,7 @@ CommonButtonID GetCommonID(const std::wstring& button) {
 // Determine whether the buttons are common buttons, if so map common ID
 // to button ID.
 void MapToCommonID(const std::vector<std::wstring>& buttons,
-                   std::map<int, int>* id_map,
+                   base::flat_map<int, int>* id_map,
                    TASKDIALOG_COMMON_BUTTON_FLAGS* button_flags,
                    std::vector<TASKDIALOG_BUTTON>* dialog_buttons) {
   for (size_t i = 0; i < buttons.size(); ++i) {
@@ -139,7 +137,7 @@ TaskDialogCallback(HWND hwnd, UINT msg, WPARAM, LPARAM, LONG_PTR data) {
   return S_OK;
 }
 
-DialogResult ShowTaskDialogWstr(NativeWindow* parent,
+DialogResult ShowTaskDialogWstr(gfx::AcceleratedWidget parent,
                                 MessageBoxType type,
                                 const std::vector<std::wstring>& buttons,
                                 int default_id,
@@ -158,12 +156,11 @@ DialogResult ShowTaskDialogWstr(NativeWindow* parent,
 
   TASKDIALOGCONFIG config = {0};
   config.cbSize = sizeof(config);
-  config.hInstance = GetModuleHandle(NULL);
+  config.hInstance = GetModuleHandle(nullptr);
   config.dwFlags = flags;
 
   if (parent) {
-    config.hwndParent = static_cast<electron::NativeWindowViews*>(parent)
-                            ->GetAcceleratedWidget();
+    config.hwndParent = parent;
   }
 
   if (default_id > 0)
@@ -218,7 +215,7 @@ DialogResult ShowTaskDialogWstr(NativeWindow* parent,
 
   // Iterate through the buttons, put common buttons in dwCommonButtons
   // and custom buttons in pButtons.
-  std::map<int, int> id_map;
+  base::flat_map<int, int> id_map;
   std::vector<TASKDIALOG_BUTTON> dialog_buttons;
   if (no_link) {
     for (size_t i = 0; i < buttons.size(); ++i)
@@ -245,7 +242,7 @@ DialogResult ShowTaskDialogWstr(NativeWindow* parent,
   TaskDialogIndirect(&config, &id, nullptr, &verification_flag_checked);
 
   int button_id;
-  if (id_map.find(id) != id_map.end())  // common button.
+  if (base::Contains(id_map, id))  // common button.
     button_id = id_map[id];
   else if (id >= kIDStart)  // custom button.
     button_id = id - kIDStart;
@@ -256,6 +253,7 @@ DialogResult ShowTaskDialogWstr(NativeWindow* parent,
 }
 
 DialogResult ShowTaskDialogUTF8(const MessageBoxSettings& settings,
+                                gfx::AcceleratedWidget parent_widget,
                                 HWND* hwnd) {
   std::vector<std::wstring> buttons;
   for (const auto& button : settings.buttons)
@@ -268,7 +266,7 @@ DialogResult ShowTaskDialogUTF8(const MessageBoxSettings& settings,
       base::UTF8ToUTF16(settings.checkbox_label);
 
   return ShowTaskDialogWstr(
-      settings.parent_window, settings.type, buttons, settings.default_id,
+      parent_widget, settings.type, buttons, settings.default_id,
       settings.cancel_id, settings.no_link, title, message, detail,
       checkbox_label, settings.checkbox_checked, settings.icon, hwnd);
 }
@@ -276,8 +274,12 @@ DialogResult ShowTaskDialogUTF8(const MessageBoxSettings& settings,
 }  // namespace
 
 int ShowMessageBoxSync(const MessageBoxSettings& settings) {
-  electron::UnresponsiveSuppressor suppressor;
-  DialogResult result = ShowTaskDialogUTF8(settings, nullptr);
+  gfx::AcceleratedWidget parent_widget =
+      settings.parent_window
+          ? static_cast<electron::NativeWindowViews*>(settings.parent_window)
+                ->GetAcceleratedWidget()
+          : nullptr;
+  DialogResult result = ShowTaskDialogUTF8(settings, parent_widget, nullptr);
   return result.button_id;
 }
 
@@ -294,17 +296,23 @@ void ShowMessageBox(const MessageBoxSettings& settings,
     hwnd = it.first->second.get();
   }
 
-  dialog_thread::Run(
-      base::BindOnce(&ShowTaskDialogUTF8, settings, base::Unretained(hwnd)),
-      base::BindOnce(
-          [](MessageBoxCallback callback, absl::optional<int> id,
-             DialogResult result) {
-            if (id)
-              GetDialogsMap().erase(*id);
-            std::move(callback).Run(result.button_id,
-                                    result.verification_flag_checked);
-          },
-          std::move(callback), settings.id));
+  gfx::AcceleratedWidget parent_widget =
+      settings.parent_window
+          ? static_cast<electron::NativeWindowViews*>(settings.parent_window)
+                ->GetAcceleratedWidget()
+          : nullptr;
+  dialog_thread::Run(base::BindOnce(&ShowTaskDialogUTF8, settings,
+                                    parent_widget, base::Unretained(hwnd)),
+                     base::BindOnce(
+                         [](MessageBoxCallback callback, std::optional<int> id,
+                            DialogResult result) {
+                           if (id)
+                             GetDialogsMap().erase(*id);
+                           std::move(callback).Run(
+                               result.button_id,
+                               result.verification_flag_checked);
+                         },
+                         std::move(callback), settings.id));
 }
 
 void CloseMessageBox(int id) {
@@ -327,7 +335,6 @@ void CloseMessageBox(int id) {
 }
 
 void ShowErrorBox(const std::u16string& title, const std::u16string& content) {
-  electron::UnresponsiveSuppressor suppressor;
   ShowTaskDialogWstr(nullptr, MessageBoxType::kError, {}, -1, 0, false,
                      u"Error", title, content, u"", false, gfx::ImageSkia(),
                      nullptr);

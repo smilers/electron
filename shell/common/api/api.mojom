@@ -9,8 +9,7 @@ interface ElectronRenderer {
   Message(
       bool internal,
       string channel,
-      blink.mojom.CloneableMessage arguments,
-      int32 sender_id);
+      blink.mojom.CloneableMessage arguments);
 
   ReceivePostMessage(string channel, blink.mojom.TransferableMessage message);
 
@@ -24,25 +23,6 @@ interface ElectronAutofillAgent {
 interface ElectronAutofillDriver {
   ShowAutofillPopup(gfx.mojom.RectF bounds, array<mojo_base.mojom.String16> values, array<mojo_base.mojom.String16> labels);
   HideAutofillPopup();
-};
-
-struct DraggableRegion {
-  bool draggable;
-  gfx.mojom.Rect bounds;
-};
-
-interface ElectronWebContentsUtility {
-  // Informs underlying WebContents that first non-empty layout was performed
-  // by compositor.
-  OnFirstNonEmptyLayout();
-
-  UpdateDraggableRegions(
-    array<DraggableRegion> regions);
-
-  SetTemporaryZoomLevel(double zoom_level);
-
-  [Sync]
-  DoGetZoomLevel() => (double result);
 };
 
 interface ElectronApiIPC {
@@ -69,13 +49,6 @@ interface ElectronApiIPC {
     bool internal,
     string channel,
     blink.mojom.CloneableMessage arguments) => (blink.mojom.CloneableMessage result);
-
-  // Emits an event from the |ipcRenderer| JavaScript object in the target
-  // WebContents's main frame, specified by |web_contents_id|.
-  MessageTo(
-    int32 web_contents_id,
-    string channel,
-    blink.mojom.CloneableMessage arguments);
 
   MessageHost(
     string channel,

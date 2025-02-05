@@ -4,13 +4,12 @@
 
 #include "shell/browser/extensions/electron_extensions_browser_client.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
-#include "base/task/post_task.h"
-#include "build/build_config.h"
 #include "chrome/browser/extensions/chrome_url_request_util.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/chrome_manifest_url_handlers.h"
@@ -18,11 +17,12 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/common/user_agent.h"
+#include "extensions/browser/api/core_extensions_browser_api_provider.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/component_extension_resource_manager.h"
-#include "extensions/browser/core_extensions_browser_api_provider.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_protocols.h"
 #include "extensions/browser/extensions_browser_interface_binders.h"
@@ -33,7 +33,6 @@
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_url_handlers.h"
-#include "net/base/mime_util.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "shell/browser/browser.h"
 #include "shell/browser/electron_browser_client.h"
@@ -85,7 +84,7 @@ bool ElectronExtensionsBrowserClient::AreExtensionsDisabled(
   return false;
 }
 
-bool ElectronExtensionsBrowserClient::IsValidContext(BrowserContext* context) {
+bool ElectronExtensionsBrowserClient::IsValidContext(void* context) {
   auto& context_map = ElectronBrowserContext::browser_context_map();
   for (auto const& entry : context_map) {
     if (entry.second && entry.second.get() == context)
@@ -120,6 +119,28 @@ BrowserContext* ElectronExtensionsBrowserClient::GetOriginalContext(
   }
 }
 
+content::BrowserContext*
+ElectronExtensionsBrowserClient::GetContextRedirectedToOriginal(
+    content::BrowserContext* context) {
+  return GetOriginalContext(context);
+}
+
+content::BrowserContext* ElectronExtensionsBrowserClient::GetContextOwnInstance(
+    content::BrowserContext* context) {
+  return context;
+}
+
+content::BrowserContext*
+ElectronExtensionsBrowserClient::GetContextForOriginalOnly(
+    content::BrowserContext* context) {
+  return context->IsOffTheRecord() ? nullptr : context;
+}
+
+bool ElectronExtensionsBrowserClient::AreExtensionsDisabledForContext(
+    content::BrowserContext* context) {
+  return false;
+}
+
 bool ElectronExtensionsBrowserClient::IsGuestSession(
     BrowserContext* context) const {
   return false;
@@ -144,22 +165,22 @@ base::FilePath ElectronExtensionsBrowserClient::GetBundleResourcePath(
   *resource_id = 0;
   base::FilePath chrome_resources_path;
   if (!base::PathService::Get(chrome::DIR_RESOURCES, &chrome_resources_path))
-    return base::FilePath();
+    return {};
 
   // Since component extension resources are included in
   // component_extension_resources.pak file in |chrome_resources_path|,
   // calculate the extension |request_relative_path| against
   // |chrome_resources_path|.
   if (!chrome_resources_path.IsParent(extension_resources_path))
-    return base::FilePath();
+    return {};
 
-  const base::FilePath request_relative_path =
+  base::FilePath request_relative_path =
       extensions::file_util::ExtensionURLToRelativeFilePath(request.url);
   if (!ExtensionsBrowserClient::Get()
            ->GetComponentExtensionResourceManager()
            ->IsComponentExtensionResource(extension_resources_path,
                                           request_relative_path, resource_id)) {
-    return base::FilePath();
+    return {};
   }
   DCHECK_NE(0, *resource_id);
 
@@ -188,10 +209,11 @@ bool AllowCrossRendererResourceLoad(
     const extensions::Extension* extension,
     const extensions::ExtensionSet& extensions,
     const extensions::ProcessMap& process_map,
+    const GURL& upstream_url,
     bool* allowed) {
   if (extensions::url_request_util::AllowCrossRendererResourceLoad(
           request, destination, page_transition, child_id, is_incognito,
-          extension, extensions, process_map, allowed)) {
+          extension, extensions, process_map, upstream_url, allowed)) {
     return true;
   }
 
@@ -217,11 +239,12 @@ bool ElectronExtensionsBrowserClient::AllowCrossRendererResourceLoad(
     bool is_incognito,
     const extensions::Extension* extension,
     const extensions::ExtensionSet& extensions,
-    const extensions::ProcessMap& process_map) {
+    const extensions::ProcessMap& process_map,
+    const GURL& upstream_url) {
   bool allowed = false;
   if (::electron::AllowCrossRendererResourceLoad(
           request, destination, page_transition, child_id, is_incognito,
-          extension, extensions, process_map, &allowed)) {
+          extension, extensions, process_map, upstream_url, &allowed)) {
     return allowed;
   }
 
@@ -241,6 +264,14 @@ void ElectronExtensionsBrowserClient::GetEarlyExtensionPrefsObservers(
 extensions::ProcessManagerDelegate*
 ElectronExtensionsBrowserClient::GetProcessManagerDelegate() const {
   return process_manager_delegate_.get();
+}
+
+mojo::PendingRemote<network::mojom::URLLoaderFactory>
+ElectronExtensionsBrowserClient::GetControlledFrameEmbedderURLLoader(
+    const url::Origin& app_origin,
+    content::FrameTreeNodeId frame_tree_node_id,
+    content::BrowserContext* browser_context) {
+  return mojo::PendingRemote<network::mojom::URLLoaderFactory>();
 }
 
 std::unique_ptr<extensions::ExtensionHostDelegate>
@@ -298,11 +329,11 @@ ElectronExtensionsBrowserClient::GetComponentExtensionResourceManager() {
 void ElectronExtensionsBrowserClient::BroadcastEventToRenderers(
     extensions::events::HistogramValue histogram_value,
     const std::string& event_name,
-    std::unique_ptr<base::ListValue> args,
+    base::Value::List args,
     bool dispatch_to_off_the_record_profiles) {
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-    base::PostTask(
-        FROM_HERE, {BrowserThread::UI},
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
         base::BindOnce(
             &ElectronExtensionsBrowserClient::BroadcastEventToRenderers,
             base::Unretained(this), histogram_value, event_name,
@@ -310,13 +341,12 @@ void ElectronExtensionsBrowserClient::BroadcastEventToRenderers(
     return;
   }
 
-  auto event = std::make_unique<extensions::Event>(
-      histogram_value, event_name, std::move(*args).TakeListDeprecated());
-  auto& context_map = ElectronBrowserContext::browser_context_map();
-  for (auto const& entry : context_map) {
-    if (entry.second) {
-      extensions::EventRouter::Get(entry.second.get())
-          ->BroadcastEvent(std::move(event));
+  for (auto const& [key, browser_context] :
+       ElectronBrowserContext::browser_context_map()) {
+    if (browser_context) {
+      extensions::EventRouter::Get(browser_context.get())
+          ->BroadcastEvent(std::make_unique<extensions::Event>(
+              histogram_value, event_name, args.Clone()));
     }
   }
 }
@@ -340,6 +370,12 @@ void ElectronExtensionsBrowserClient::SetAPIClientForTest(
   api_client_.reset(api_client);
 }
 
+void ElectronExtensionsBrowserClient::CreateExtensionWebContentsObserver(
+    content::WebContents* web_contents) {
+  extensions::ElectronExtensionWebContentsObserver::CreateForWebContents(
+      web_contents);
+}
+
 extensions::ExtensionWebContentsObserver*
 ElectronExtensionsBrowserClient::GetExtensionWebContentsObserver(
     content::WebContents* web_contents) {
@@ -351,11 +387,6 @@ extensions::KioskDelegate* ElectronExtensionsBrowserClient::GetKioskDelegate() {
   if (!kiosk_delegate_)
     kiosk_delegate_ = std::make_unique<ElectronKioskDelegate>();
   return kiosk_delegate_.get();
-}
-
-bool ElectronExtensionsBrowserClient::IsLockScreenContext(
-    content::BrowserContext* context) {
-  return false;
 }
 
 std::string ElectronExtensionsBrowserClient::GetApplicationLocale() {

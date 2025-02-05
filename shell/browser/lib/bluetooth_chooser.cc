@@ -14,7 +14,7 @@ struct Converter<electron::BluetoothChooser::DeviceInfo> {
   static v8::Local<v8::Value> ToV8(
       v8::Isolate* isolate,
       const electron::BluetoothChooser::DeviceInfo& val) {
-    gin_helper::Dictionary dict = gin::Dictionary::CreateEmpty(isolate);
+    auto dict = gin_helper::Dictionary::CreateEmpty(isolate);
     dict.Set("deviceName", val.device_name);
     dict.Set("deviceId", val.device_id);
     return gin::ConvertToV8(isolate, dict);
@@ -26,8 +26,6 @@ struct Converter<electron::BluetoothChooser::DeviceInfo> {
 namespace electron {
 
 namespace {
-
-const int kMaxScanRetries = 5;
 
 void OnDeviceChosen(const content::BluetoothChooser::EventHandler& handler,
                     const std::string& device_id) {
@@ -66,29 +64,15 @@ void BluetoothChooser::SetAdapterPresence(AdapterPresence presence) {
 }
 
 void BluetoothChooser::ShowDiscoveryState(DiscoveryState state) {
+  bool idle_state = false;
   switch (state) {
     case DiscoveryState::FAILED_TO_START:
       refreshing_ = false;
       event_handler_.Run(content::BluetoothChooserEvent::CANCELLED, "");
-      break;
+      return;
     case DiscoveryState::IDLE:
       refreshing_ = false;
-      if (device_map_.empty()) {
-        auto event = ++num_retries_ > kMaxScanRetries
-                         ? content::BluetoothChooserEvent::CANCELLED
-                         : content::BluetoothChooserEvent::RESCAN;
-        event_handler_.Run(event, "");
-      } else {
-        bool prevent_default = api_web_contents_->Emit(
-            "select-bluetooth-device", GetDeviceList(),
-            base::BindOnce(&OnDeviceChosen, event_handler_));
-        if (!prevent_default) {
-          auto it = device_map_.begin();
-          auto device_id = it->first;
-          event_handler_.Run(content::BluetoothChooserEvent::SELECTED,
-                             device_id);
-        }
-      }
+      idle_state = true;
       break;
     case DiscoveryState::DISCOVERING:
       // The first time this state fires is due to a rescan triggering so set a
@@ -100,6 +84,18 @@ void BluetoothChooser::ShowDiscoveryState(DiscoveryState state) {
         refreshing_ = false;
       }
       break;
+  }
+  bool prevent_default =
+      api_web_contents_->Emit("select-bluetooth-device", GetDeviceList(),
+                              base::BindOnce(&OnDeviceChosen, event_handler_));
+  if (!prevent_default && idle_state) {
+    if (device_map_.empty()) {
+      event_handler_.Run(content::BluetoothChooserEvent::CANCELLED, "");
+    } else {
+      auto it = device_map_.begin();
+      auto device_id = it->first;
+      event_handler_.Run(content::BluetoothChooserEvent::SELECTED, device_id);
+    }
   }
 }
 
@@ -114,13 +110,10 @@ void BluetoothChooser::AddOrUpdateDevice(const std::string& device_id,
     // an event
     return;
   }
-  bool changed = false;
-  auto entry = device_map_.find(device_id);
-  if (entry == device_map_.end()) {
-    device_map_[device_id] = device_name;
-    changed = true;
-  } else if (should_update_name) {
-    entry->second = device_name;
+
+  auto [iter, changed] = device_map_.try_emplace(device_id, device_name);
+  if (!changed && should_update_name) {
+    iter->second = device_name;
     changed = true;
   }
 
@@ -131,7 +124,7 @@ void BluetoothChooser::AddOrUpdateDevice(const std::string& device_id,
         "select-bluetooth-device", GetDeviceList(),
         base::BindOnce(&OnDeviceChosen, event_handler_));
 
-    // If emit not implimented select first device that matches the filters
+    // If emit not implemented select first device that matches the filters
     //  provided.
     if (!prevent_default) {
       event_handler_.Run(content::BluetoothChooserEvent::SELECTED, device_id);
@@ -143,11 +136,8 @@ std::vector<electron::BluetoothChooser::DeviceInfo>
 BluetoothChooser::GetDeviceList() {
   std::vector<electron::BluetoothChooser::DeviceInfo> vec;
   vec.reserve(device_map_.size());
-  for (const auto& it : device_map_) {
-    DeviceInfo info = {it.first, it.second};
-    vec.push_back(info);
-  }
-
+  for (const auto& [device_id, device_name] : device_map_)
+    vec.emplace_back(device_id, device_name);
   return vec;
 }
 

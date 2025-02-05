@@ -8,12 +8,12 @@ was removed as part of the Raw Clipboard API scrubbing.
 https://bugs.chromium.org/p/chromium/issues/detail?id=1217643
 
 diff --git a/ui/base/clipboard/scoped_clipboard_writer.cc b/ui/base/clipboard/scoped_clipboard_writer.cc
-index 3009acd40eee36bc3d4dd8642f0ce5e6476da973..1d52ce84184a3ca94e4e0f04d331bf56d75e07d0 100644
+index 48f0b7a7812a073c31ac1d7af156470efbb1b051..296ee0b51e3bdd68ceb63df4fbe5813a91669b7c 100644
 --- a/ui/base/clipboard/scoped_clipboard_writer.cc
 +++ b/ui/base/clipboard/scoped_clipboard_writer.cc
-@@ -227,6 +227,16 @@ void ScopedClipboardWriter::WriteEncodedDataTransferEndpointForTesting(
+@@ -227,6 +227,16 @@ void ScopedClipboardWriter::WriteData(const std::u16string& format,
+   }
  }
- #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
  
 +void ScopedClipboardWriter::WriteUnsafeRawData(const std::u16string& format,
 +                                               mojo_base::BigBuffer data) {
@@ -27,12 +27,12 @@ index 3009acd40eee36bc3d4dd8642f0ce5e6476da973..1d52ce84184a3ca94e4e0f04d331bf56
 +
  void ScopedClipboardWriter::Reset() {
    objects_.clear();
-   platform_representations_.clear();
+   raw_objects_.clear();
 diff --git a/ui/base/clipboard/scoped_clipboard_writer.h b/ui/base/clipboard/scoped_clipboard_writer.h
-index c47909313da0d7cd8a2b3cd670327011af66e3fb..0d259c21507f38124dfa46aceeacfda76cfd4a38 100644
+index e63c08b06c00dc0b1bd9c8339d3c6375e952e4f7..9e35ab7e6512c749fdea75fa863a97318541d350 100644
 --- a/ui/base/clipboard/scoped_clipboard_writer.h
 +++ b/ui/base/clipboard/scoped_clipboard_writer.h
-@@ -84,6 +84,10 @@ class COMPONENT_EXPORT(UI_BASE_CLIPBOARD) ScopedClipboardWriter {
+@@ -88,6 +88,10 @@ class COMPONENT_EXPORT(UI_BASE_CLIPBOARD) ScopedClipboardWriter {
    // This is only used to write custom format data.
    void WriteData(const std::u16string& format, mojo_base::BigBuffer data);
  
@@ -42,4 +42,4 @@ index c47909313da0d7cd8a2b3cd670327011af66e3fb..0d259c21507f38124dfa46aceeacfda7
 +
    void WriteImage(const SkBitmap& bitmap);
  
- #if BUILDFLAG(IS_CHROMEOS_LACROS)
+   // Mark the data to be written as confidential.

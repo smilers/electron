@@ -5,9 +5,11 @@
 #include "shell/browser/api/electron_api_tray.h"
 
 #include <string>
+#include <string_view>
 
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/containers/fixed_flat_map.h"
 #include "gin/dictionary.h"
+#include "gin/handle.h"
 #include "gin/object_template_builder.h"
 #include "shell/browser/api/electron_api_menu.h"
 #include "shell/browser/api/ui_event.h"
@@ -19,9 +21,8 @@
 #include "shell/common/gin_converters/guid_converter.h"
 #include "shell/common/gin_converters/image_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
-#include "shell/common/gin_helper/function_template_extensions.h"
+#include "shell/common/gin_helper/error_thrower.h"
 #include "shell/common/node_includes.h"
-#include "ui/gfx/image/image.h"
 
 namespace gin {
 
@@ -30,41 +31,28 @@ struct Converter<electron::TrayIcon::IconType> {
   static bool FromV8(v8::Isolate* isolate,
                      v8::Local<v8::Value> val,
                      electron::TrayIcon::IconType* out) {
-    using IconType = electron::TrayIcon::IconType;
-    std::string mode;
-    if (ConvertFromV8(isolate, val, &mode)) {
-      if (mode == "none") {
-        *out = IconType::kNone;
-        return true;
-      } else if (mode == "info") {
-        *out = IconType::kInfo;
-        return true;
-      } else if (mode == "warning") {
-        *out = IconType::kWarning;
-        return true;
-      } else if (mode == "error") {
-        *out = IconType::kError;
-        return true;
-      } else if (mode == "custom") {
-        *out = IconType::kCustom;
-        return true;
-      }
-    }
-    return false;
+    using Val = electron::TrayIcon::IconType;
+    static constexpr auto Lookup =
+        base::MakeFixedFlatMap<std::string_view, Val>({
+            {"custom", Val::kCustom},
+            {"error", Val::kError},
+            {"info", Val::kInfo},
+            {"none", Val::kNone},
+            {"warning", Val::kWarning},
+        });
+    return FromV8WithLookup(isolate, val, Lookup, out);
   }
 };
 
 }  // namespace gin
 
-namespace electron {
-
-namespace api {
+namespace electron::api {
 
 gin::WrapperInfo Tray::kWrapperInfo = {gin::kEmbedderNativeGin};
 
 Tray::Tray(v8::Isolate* isolate,
            v8::Local<v8::Value> image,
-           absl::optional<UUID> guid)
+           std::optional<UUID> guid)
     : tray_icon_(TrayIcon::Create(guid)) {
   SetImage(isolate, image);
   tray_icon_->AddObserver(this);
@@ -75,22 +63,32 @@ Tray::~Tray() = default;
 // static
 gin::Handle<Tray> Tray::New(gin_helper::ErrorThrower thrower,
                             v8::Local<v8::Value> image,
-                            absl::optional<UUID> guid,
+                            std::optional<UUID> guid,
                             gin::Arguments* args) {
   if (!Browser::Get()->is_ready()) {
     thrower.ThrowError("Cannot create Tray before app is ready");
-    return gin::Handle<Tray>();
+    return {};
   }
 
 #if BUILDFLAG(IS_WIN)
   if (!guid.has_value() && args->Length() > 1) {
     thrower.ThrowError("Invalid GUID format");
-    return gin::Handle<Tray>();
+    return {};
   }
 #endif
 
-  auto handle = gin::CreateHandle(args->isolate(),
-                                  new Tray(args->isolate(), image, guid));
+  // Error thrown by us will be dropped when entering V8.
+  // Make sure to abort early and propagate the error to JS.
+  // Refs https://chromium-review.googlesource.com/c/v8/v8/+/5050065
+  v8::TryCatch try_catch(args->isolate());
+  auto* tray = new Tray(args->isolate(), image, guid);
+  if (try_catch.HasCaught()) {
+    delete tray;
+    try_catch.ReThrow();
+    return {};
+  }
+
+  auto handle = gin::CreateHandle(args->isolate(), tray);
   handle->Pin(args->isolate());
   return handle;
 }
@@ -100,19 +98,25 @@ void Tray::OnClicked(const gfx::Rect& bounds,
                      int modifiers) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   v8::HandleScope scope(isolate);
-  EmitCustomEvent("click", CreateEventFromFlags(modifiers), bounds, location);
+  EmitWithoutEvent("click", CreateEventFromFlags(modifiers), bounds, location);
 }
 
 void Tray::OnDoubleClicked(const gfx::Rect& bounds, int modifiers) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   v8::HandleScope scope(isolate);
-  EmitCustomEvent("double-click", CreateEventFromFlags(modifiers), bounds);
+  EmitWithoutEvent("double-click", CreateEventFromFlags(modifiers), bounds);
 }
 
 void Tray::OnRightClicked(const gfx::Rect& bounds, int modifiers) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   v8::HandleScope scope(isolate);
-  EmitCustomEvent("right-click", CreateEventFromFlags(modifiers), bounds);
+  EmitWithoutEvent("right-click", CreateEventFromFlags(modifiers), bounds);
+}
+
+void Tray::OnMiddleClicked(const gfx::Rect& bounds, int modifiers) {
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  v8::HandleScope scope(isolate);
+  EmitWithoutEvent("middle-click", CreateEventFromFlags(modifiers), bounds);
 }
 
 void Tray::OnBalloonShow() {
@@ -142,31 +146,31 @@ void Tray::OnDropText(const std::string& text) {
 void Tray::OnMouseEntered(const gfx::Point& location, int modifiers) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   v8::HandleScope scope(isolate);
-  EmitCustomEvent("mouse-enter", CreateEventFromFlags(modifiers), location);
+  EmitWithoutEvent("mouse-enter", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnMouseExited(const gfx::Point& location, int modifiers) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   v8::HandleScope scope(isolate);
-  EmitCustomEvent("mouse-leave", CreateEventFromFlags(modifiers), location);
+  EmitWithoutEvent("mouse-leave", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnMouseMoved(const gfx::Point& location, int modifiers) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   v8::HandleScope scope(isolate);
-  EmitCustomEvent("mouse-move", CreateEventFromFlags(modifiers), location);
+  EmitWithoutEvent("mouse-move", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnMouseUp(const gfx::Point& location, int modifiers) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   v8::HandleScope scope(isolate);
-  EmitCustomEvent("mouse-up", CreateEventFromFlags(modifiers), location);
+  EmitWithoutEvent("mouse-up", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnMouseDown(const gfx::Point& location, int modifiers) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   v8::HandleScope scope(isolate);
-  EmitCustomEvent("mouse-down", CreateEventFromFlags(modifiers), location);
+  EmitWithoutEvent("mouse-down", CreateEventFromFlags(modifiers), location);
 }
 
 void Tray::OnDragEntered() {
@@ -229,7 +233,7 @@ void Tray::SetToolTip(const std::string& tool_tip) {
 }
 
 void Tray::SetTitle(const std::string& title,
-                    const absl::optional<gin_helper::Dictionary>& options,
+                    const std::optional<gin_helper::Dictionary>& options,
                     gin::Arguments* args) {
   if (!CheckAlive())
     return;
@@ -260,7 +264,7 @@ void Tray::SetTitle(const std::string& title,
 
 std::string Tray::GetTitle() {
   if (!CheckAlive())
-    return std::string();
+    return {};
 #if BUILDFLAG(IS_MAC)
   return tray_icon_->GetTitle();
 #else
@@ -355,7 +359,9 @@ void Tray::PopUpContextMenu(gin::Arguments* args) {
       }
     }
   }
-  tray_icon_->PopUpContextMenu(pos, menu.IsEmpty() ? nullptr : menu->model());
+
+  tray_icon_->PopUpContextMenu(
+      pos, menu.IsEmpty() ? nullptr : menu->model()->GetWeakPtr());
 }
 
 void Tray::CloseContextMenu() {
@@ -382,14 +388,13 @@ void Tray::SetContextMenu(gin_helper::ErrorThrower thrower,
 
 gfx::Rect Tray::GetBounds() {
   if (!CheckAlive())
-    return gfx::Rect();
+    return {};
   return tray_icon_->GetBounds();
 }
 
 bool Tray::CheckAlive() {
   if (!tray_icon_) {
     v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-    v8::Locker locker(isolate);
     v8::HandleScope scope(isolate);
     gin_helper::ErrorThrower(isolate).ThrowError("Tray is destroyed");
     return false;
@@ -398,10 +403,9 @@ bool Tray::CheckAlive() {
 }
 
 // static
-v8::Local<v8::ObjectTemplate> Tray::FillObjectTemplate(
-    v8::Isolate* isolate,
-    v8::Local<v8::ObjectTemplate> templ) {
-  return gin::ObjectTemplateBuilder(isolate, "Tray", templ)
+void Tray::FillObjectTemplate(v8::Isolate* isolate,
+                              v8::Local<v8::ObjectTemplate> templ) {
+  gin::ObjectTemplateBuilder(isolate, GetClassName(), templ)
       .SetMethod("destroy", &Tray::Destroy)
       .SetMethod("isDestroyed", &Tray::IsDestroyed)
       .SetMethod("setImage", &Tray::SetImage)
@@ -423,9 +427,15 @@ v8::Local<v8::ObjectTemplate> Tray::FillObjectTemplate(
       .Build();
 }
 
-}  // namespace api
+const char* Tray::GetTypeName() {
+  return GetClassName();
+}
 
-}  // namespace electron
+void Tray::WillBeDestroyed() {
+  ClearWeak();
+}
+
+}  // namespace electron::api
 
 namespace {
 
@@ -443,4 +453,4 @@ void Initialize(v8::Local<v8::Object> exports,
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_tray, Initialize)
+NODE_LINKED_BINDING_CONTEXT_AWARE(electron_browser_tray, Initialize)

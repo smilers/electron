@@ -6,8 +6,6 @@
 
 #include <utility>
 
-#include "base/stl_util.h"
-
 namespace electron {
 
 #if BUILDFLAG(IS_MAC)
@@ -27,42 +25,43 @@ ElectronMenuModel::ElectronMenuModel(Delegate* delegate)
 
 ElectronMenuModel::~ElectronMenuModel() = default;
 
-void ElectronMenuModel::SetToolTip(int index, const std::u16string& toolTip) {
+void ElectronMenuModel::SetToolTip(size_t index,
+                                   const std::u16string& toolTip) {
   int command_id = GetCommandIdAt(index);
   toolTips_[command_id] = toolTip;
 }
 
-std::u16string ElectronMenuModel::GetToolTipAt(int index) {
+std::u16string ElectronMenuModel::GetToolTipAt(size_t index) {
   const int command_id = GetCommandIdAt(index);
   const auto iter = toolTips_.find(command_id);
   return iter == std::end(toolTips_) ? std::u16string() : iter->second;
 }
 
-void ElectronMenuModel::SetRole(int index, const std::u16string& role) {
+void ElectronMenuModel::SetRole(size_t index, const std::u16string& role) {
   int command_id = GetCommandIdAt(index);
   roles_[command_id] = role;
 }
 
-std::u16string ElectronMenuModel::GetRoleAt(int index) {
+std::u16string ElectronMenuModel::GetRoleAt(size_t index) {
   const int command_id = GetCommandIdAt(index);
   const auto iter = roles_.find(command_id);
   return iter == std::end(roles_) ? std::u16string() : iter->second;
 }
 
-void ElectronMenuModel::SetSecondaryLabel(int index,
+void ElectronMenuModel::SetSecondaryLabel(size_t index,
                                           const std::u16string& sublabel) {
   int command_id = GetCommandIdAt(index);
   sublabels_[command_id] = sublabel;
 }
 
-std::u16string ElectronMenuModel::GetSecondaryLabelAt(int index) const {
+std::u16string ElectronMenuModel::GetSecondaryLabelAt(size_t index) const {
   int command_id = GetCommandIdAt(index);
   const auto iter = sublabels_.find(command_id);
   return iter == std::end(sublabels_) ? std::u16string() : iter->second;
 }
 
 bool ElectronMenuModel::GetAcceleratorAtWithParams(
-    int index,
+    size_t index,
     bool use_default_accelerator,
     ui::Accelerator* accelerator) const {
   if (delegate_) {
@@ -72,7 +71,7 @@ bool ElectronMenuModel::GetAcceleratorAtWithParams(
   return false;
 }
 
-bool ElectronMenuModel::ShouldRegisterAcceleratorAt(int index) const {
+bool ElectronMenuModel::ShouldRegisterAcceleratorAt(size_t index) const {
   if (delegate_) {
     return delegate_->ShouldRegisterAcceleratorForCommandId(
         GetCommandIdAt(index));
@@ -80,7 +79,7 @@ bool ElectronMenuModel::ShouldRegisterAcceleratorAt(int index) const {
   return true;
 }
 
-bool ElectronMenuModel::WorksWhenHiddenAt(int index) const {
+bool ElectronMenuModel::WorksWhenHiddenAt(size_t index) const {
   if (delegate_) {
     return delegate_->ShouldCommandIdWorkWhenHidden(GetCommandIdAt(index));
   }
@@ -88,7 +87,8 @@ bool ElectronMenuModel::WorksWhenHiddenAt(int index) const {
 }
 
 #if BUILDFLAG(IS_MAC)
-bool ElectronMenuModel::GetSharingItemAt(int index, SharingItem* item) const {
+bool ElectronMenuModel::GetSharingItemAt(size_t index,
+                                         SharingItem* item) const {
   if (delegate_)
     return delegate_->GetSharingItemForCommandId(GetCommandIdAt(index), item);
   return false;
@@ -96,11 +96,6 @@ bool ElectronMenuModel::GetSharingItemAt(int index, SharingItem* item) const {
 
 void ElectronMenuModel::SetSharingItem(SharingItem item) {
   sharing_item_.emplace(std::move(item));
-}
-
-const absl::optional<ElectronMenuModel::SharingItem>&
-ElectronMenuModel::GetSharingItem() const {
-  return sharing_item_;
 }
 #endif
 
@@ -118,7 +113,7 @@ void ElectronMenuModel::MenuWillShow() {
   }
 }
 
-ElectronMenuModel* ElectronMenuModel::GetSubmenuModelAt(int index) {
+ElectronMenuModel* ElectronMenuModel::GetSubmenuModelAt(size_t index) {
   return static_cast<ElectronMenuModel*>(
       ui::SimpleMenuModel::GetSubmenuModelAt(index));
 }

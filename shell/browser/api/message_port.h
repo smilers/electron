@@ -9,8 +9,8 @@
 #include <vector>
 
 #include "gin/wrappable.h"
-#include "mojo/public/cpp/bindings/connector.h"
 #include "mojo/public/cpp/bindings/message.h"
+#include "shell/common/gin_helper/cleaned_up_at_exit.h"
 #include "third_party/blink/public/common/messaging/message_port_channel.h"
 #include "third_party/blink/public/common/messaging/message_port_descriptor.h"
 
@@ -20,10 +20,16 @@ template <typename T>
 class Handle;
 }  // namespace gin
 
+namespace mojo {
+class Connector;
+}  // namespace mojo
+
 namespace electron {
 
 // A non-blink version of blink::MessagePort.
-class MessagePort : public gin::Wrappable<MessagePort>, mojo::MessageReceiver {
+class MessagePort final : public gin::Wrappable<MessagePort>,
+                          public gin_helper::CleanedUpAtExit,
+                          public mojo::MessageReceiver {
  public:
   ~MessagePort() override;
   static gin::Handle<MessagePort> Create(v8::Isolate* isolate);
@@ -37,8 +43,8 @@ class MessagePort : public gin::Wrappable<MessagePort>, mojo::MessageReceiver {
 
   blink::MessagePortChannel Disentangle();
 
-  bool IsEntangled() const { return !closed_ && !IsNeutered(); }
-  bool IsNeutered() const { return !connector_ || !connector_->is_valid(); }
+  [[nodiscard]] bool IsEntangled() const;
+  [[nodiscard]] bool IsNeutered() const;
 
   static std::vector<gin::Handle<MessagePort>> EntanglePorts(
       v8::Isolate* isolate,
@@ -50,10 +56,13 @@ class MessagePort : public gin::Wrappable<MessagePort>, mojo::MessageReceiver {
       bool* threw_exception);
 
   // gin::Wrappable
+  static gin::WrapperInfo kWrapperInfo;
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
       v8::Isolate* isolate) override;
-  static gin::WrapperInfo kWrapperInfo;
   const char* GetTypeName() override;
+
+  // gin_helper::CleanedUpAtExit
+  void WillBeDestroyed() override;
 
  private:
   MessagePort();
@@ -61,7 +70,7 @@ class MessagePort : public gin::Wrappable<MessagePort>, mojo::MessageReceiver {
   // The blink version of MessagePort uses the very nice "ActiveScriptWrapper"
   // class, which keeps the object alive through the V8 embedder hooks into the
   // GC lifecycle: see
-  // https://source.chromium.org/chromium/chromium/src/+/master:third_party/blink/renderer/platform/heap/thread_state.cc;l=258;drc=b892cf58e162a8f66cd76d7472f129fe0fb6a7d1
+  // https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/platform/heap/thread_state.cc;l=258;drc=b892cf58e162a8f66cd76d7472f129fe0fb6a7d1
   // We do not have that luxury, so we brutishly use v8::Global to accomplish
   // something similar. Critically, whenever the value of
   // "HasPendingActivity()" changes, we must call Pin() or Unpin() as

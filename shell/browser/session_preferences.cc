@@ -13,10 +13,15 @@ namespace electron {
 // static
 int SessionPreferences::kLocatorKey = 0;
 
-SessionPreferences::SessionPreferences(content::BrowserContext* context) {
-  context->SetUserData(&kLocatorKey, base::WrapUnique(this));
+// static
+void SessionPreferences::CreateForBrowserContext(
+    content::BrowserContext* context) {
+  DCHECK(context);
+  context->SetUserData(&kLocatorKey,
+                       base::WrapUnique(new SessionPreferences{}));
 }
 
+SessionPreferences::SessionPreferences() = default;
 SessionPreferences::~SessionPreferences() = default;
 
 // static
@@ -25,22 +30,13 @@ SessionPreferences* SessionPreferences::FromBrowserContext(
   return static_cast<SessionPreferences*>(context->GetUserData(&kLocatorKey));
 }
 
-// static
-std::vector<base::FilePath> SessionPreferences::GetValidPreloads(
-    content::BrowserContext* context) {
-  std::vector<base::FilePath> result;
-
-  if (auto* self = FromBrowserContext(context)) {
-    for (const auto& preload : self->preloads()) {
-      if (preload.IsAbsolute()) {
-        result.emplace_back(preload);
-      } else {
-        LOG(ERROR) << "preload script must have absolute path: " << preload;
-      }
-    }
-  }
-
-  return result;
+bool SessionPreferences::HasServiceWorkerPreloadScript() {
+  const auto& preloads = preload_scripts();
+  auto it = std::find_if(
+      preloads.begin(), preloads.end(), [](const PreloadScript& script) {
+        return script.script_type == PreloadScript::ScriptType::kServiceWorker;
+      });
+  return it != preloads.end();
 }
 
 }  // namespace electron

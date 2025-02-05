@@ -7,10 +7,10 @@ Build libc++ as static library to compile and pass
 nan tests
 
 diff --git a/buildtools/third_party/libc++/BUILD.gn b/buildtools/third_party/libc++/BUILD.gn
-index a53cc9066a3485ff6829e3c410eb523de7d074d6..9697e2dc2d0892fc7f1007d62488c2f2f24ec92f 100644
+index 5c366d2dded04400a3d9c2cb9c31bdfd286e7246..90902df8843858cd8db547d38ee4f58f0dad722c 100644
 --- a/buildtools/third_party/libc++/BUILD.gn
 +++ b/buildtools/third_party/libc++/BUILD.gn
-@@ -44,7 +44,11 @@ config("winver") {
+@@ -48,7 +48,11 @@ config("winver") {
  if (libcxx_is_shared) {
    _libcxx_target_type = "shared_library"
  } else {
@@ -23,7 +23,7 @@ index a53cc9066a3485ff6829e3c410eb523de7d074d6..9697e2dc2d0892fc7f1007d62488c2f2
  }
  target(_libcxx_target_type, "libc++") {
    # Most things that need to depend on libc++ should do so via the implicit
-@@ -52,6 +56,7 @@ target(_libcxx_target_type, "libc++") {
+@@ -56,6 +60,7 @@ target(_libcxx_target_type, "libc++") {
    # need to explicitly depend on libc++.
    visibility = [
      "//build/config:common_deps",
@@ -32,12 +32,12 @@ index a53cc9066a3485ff6829e3c410eb523de7d074d6..9697e2dc2d0892fc7f1007d62488c2f2
    ]
    if (is_linux) {
 diff --git a/buildtools/third_party/libc++abi/BUILD.gn b/buildtools/third_party/libc++abi/BUILD.gn
-index 40f1285f14c0843405e0ee51879b8742285a006d..5be895d3e36df53a5960006a1513f1322400fd23 100644
+index 331ea447ea15e9f439396d4c7d41832de60adf4a..b96a994c43ac2ed0b0d5ec599f907ea0b501156e 100644
 --- a/buildtools/third_party/libc++abi/BUILD.gn
 +++ b/buildtools/third_party/libc++abi/BUILD.gn
-@@ -4,7 +4,7 @@
- 
+@@ -6,7 +6,7 @@ import("//build/config/android/config.gni")
  import("//build/config/c++/c++.gni")
+ import("//build/config/unwind.gni")
  
 -source_set("libc++abi") {
 +static_library("libc++abi") {
