@@ -7,20 +7,24 @@
 
 #include <string>
 
-#include "gin/handle.h"
 #include "gin/wrappable.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/cpp/data_element.h"
 #include "services/network/public/mojom/data_pipe_getter.mojom.h"
 
-namespace electron {
+namespace gin {
+template <typename T>
+class Handle;
+}  // namespace gin
 
-namespace api {
+namespace electron::api {
 
 // Retains reference to the data pipe.
-class DataPipeHolder : public gin::Wrappable<DataPipeHolder> {
+class DataPipeHolder final : public gin::Wrappable<DataPipeHolder> {
  public:
+  // gin::Wrappable
   static gin::WrapperInfo kWrapperInfo;
+  const char* GetTypeName() override;
 
   static gin::Handle<DataPipeHolder> Create(
       v8::Isolate* isolate,
@@ -49,8 +53,6 @@ class DataPipeHolder : public gin::Wrappable<DataPipeHolder> {
   mojo::Remote<network::mojom::DataPipeGetter> data_pipe_;
 };
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api
 
 #endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_DATA_PIPE_HOLDER_H_

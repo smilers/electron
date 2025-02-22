@@ -1,7 +1,7 @@
-import * as cp from 'child_process';
-import * as fs from 'fs-extra';
-import * as os from 'os';
-import * as path from 'path';
+import * as cp from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 const rootPath = path.resolve(__dirname, '..');
 const gniPath = path.resolve(__dirname, '../filenames.auto.gni');
@@ -38,20 +38,28 @@ const main = async () => {
       config: 'webpack.config.worker.js'
     },
     {
-      name: 'asar_bundle_deps',
-      config: 'webpack.config.asar.js'
+      name: 'node_bundle_deps',
+      config: 'webpack.config.node.js'
+    },
+    {
+      name: 'utility_bundle_deps',
+      config: 'webpack.config.utility.js'
+    },
+    {
+      name: 'preload_realm_bundle_deps',
+      config: 'webpack.config.preload_realm.js'
     }
   ];
 
   const webpackTargetsWithDeps = await Promise.all(webpackTargets.map(async webpackTarget => {
-    const tmpDir = await fs.mkdtemp(path.resolve(os.tmpdir(), 'electron-filenames-'));
+    const tmpDir = await fs.promises.mkdtemp(path.resolve(os.tmpdir(), 'electron-filenames-'));
     const child = cp.spawn('node', [
       './node_modules/webpack-cli/bin/cli.js',
       '--config', `./build/webpack/${webpackTarget.config}`,
-      '--display', 'errors-only',
-      `--output-path=${tmpDir}`,
-      `--output-filename=${webpackTarget.name}.measure.js`,
-      '--env.PRINT_WEBPACK_GRAPH'
+      '--stats', 'errors-only',
+      '--output-path', tmpDir,
+      '--output-filename', `${webpackTarget.name}.measure.js`,
+      '--env', 'PRINT_WEBPACK_GRAPH'
     ], {
       cwd: path.resolve(__dirname, '..')
     });
@@ -85,7 +93,7 @@ const main = async () => {
         // Make the generated list easier to read
         .sort()
     };
-    await fs.remove(tmpDir);
+    await fs.promises.rm(tmpDir, { force: true, recursive: true });
     return webpackTargetWithDeps;
   }));
 

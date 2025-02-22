@@ -7,20 +7,19 @@ Subject: feat: allow embedders to add observers on created hunspell
 This patch is used by Electron to implement spellchecker events.
 
 diff --git a/chrome/browser/spellchecker/spellcheck_service.cc b/chrome/browser/spellchecker/spellcheck_service.cc
-index fb1ce87c18a72deb815b78b2f989fe0a8ebaf0bc..417e89f3ba808d9e599d391d57df0e481afb5522 100644
+index 5140efab98b7d8d357ea0d97ee25814ea2e1ed8f..979630ba7ffe84d78804a02b832ce7787aecf2d9 100644
 --- a/chrome/browser/spellchecker/spellcheck_service.cc
 +++ b/chrome/browser/spellchecker/spellcheck_service.cc
-@@ -468,6 +468,9 @@ void SpellcheckService::LoadDictionaries() {
+@@ -478,6 +478,8 @@ void SpellcheckService::LoadDictionaries() {
          std::make_unique<SpellcheckHunspellDictionary>(
              dictionary, platform_spellcheck_language, context_, this));
      hunspell_dictionaries_.back()->AddObserver(this);
-+    if (hunspell_observer_) {
++    if (hunspell_observer_)
 +      hunspell_dictionaries_.back()->AddObserver(hunspell_observer_);
-+    }
      hunspell_dictionaries_.back()->Load();
    }
  
-@@ -520,6 +523,20 @@ bool SpellcheckService::IsSpellcheckEnabled() const {
+@@ -532,6 +534,20 @@ bool SpellcheckService::IsSpellcheckEnabled() const {
           (!hunspell_dictionaries_.empty() || enable_if_uninitialized);
  }
  
@@ -38,27 +37,27 @@ index fb1ce87c18a72deb815b78b2f989fe0a8ebaf0bc..417e89f3ba808d9e599d391d57df0e48
 +  hunspell_observer_ = observer;
 +}
 +
- void SpellcheckService::Observe(int type,
-                                 const content::NotificationSource& source,
-                                 const content::NotificationDetails& details) {
+ void SpellcheckService::OnRenderProcessHostCreated(
+     content::RenderProcessHost* host) {
+   InitForRenderer(host);
 diff --git a/chrome/browser/spellchecker/spellcheck_service.h b/chrome/browser/spellchecker/spellcheck_service.h
-index c17c42fdfd943e7b77e0d7a8d333afd70e9c6abc..ab9ef6b1efdd63ea7cc47be2cf7de79eb9aa1b90 100644
+index 00e613bb4ca4346eb0b0e65b9b818d817ac724d9..1b40931b8654b80e9a5fd0f170217b4b008eaae9 100644
 --- a/chrome/browser/spellchecker/spellcheck_service.h
 +++ b/chrome/browser/spellchecker/spellcheck_service.h
-@@ -138,6 +138,8 @@ class SpellcheckService : public KeyedService,
+@@ -135,6 +135,8 @@ class SpellcheckService : public KeyedService,
    // dictionaries available.
    bool IsSpellcheckEnabled() const;
  
 +  void SetHunspellObserver(SpellcheckHunspellDictionary::Observer* observer);
 +
-   // NotificationProfile implementation.
-   void Observe(int type,
-                const content::NotificationSource& source,
-@@ -305,6 +307,8 @@ class SpellcheckService : public KeyedService,
+   // content::RenderProcessHostCreationObserver implementation.
+   void OnRenderProcessHostCreated(content::RenderProcessHost* host) override;
+ 
+@@ -299,6 +301,8 @@ class SpellcheckService : public KeyedService,
    // A pointer to the BrowserContext which this service refers to.
    raw_ptr<content::BrowserContext> context_;
  
-+  SpellcheckHunspellDictionary::Observer* hunspell_observer_ = nullptr;
++  raw_ptr<SpellcheckHunspellDictionary::Observer> hunspell_observer_ = nullptr;
 +
    std::unique_ptr<SpellCheckHostMetrics> metrics_;
  

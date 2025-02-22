@@ -1,9 +1,21 @@
-import * as path from 'path';
 import { IPC_MESSAGES } from '@electron/internal/common/ipc-messages';
-
 import type * as ipcRendererInternalModule from '@electron/internal/renderer/ipc-renderer-internal';
+import type * as ipcRendererUtilsModule from '@electron/internal/renderer/ipc-renderer-internal-utils';
 
-const Module = require('module');
+import * as path from 'path';
+import { pathToFileURL } from 'url';
+
+const Module = require('module') as NodeJS.ModuleInternal;
+
+// We do not want to allow use of the VM module in the renderer process as
+// it conflicts with Blink's V8::Context internal logic.
+const originalModuleLoad = Module._load;
+Module._load = function (request: string) {
+  if (request === 'vm') {
+    console.warn('The vm module of Node.js is unsupported in Electron\'s renderer process due to incompatibilities with the Blink rendering engine. Crashes are likely and avoiding the module is highly recommended. This module may be removed in a future release.');
+  }
+  return originalModuleLoad.apply(this, arguments as any);
+};
 
 // Make sure globals like "process" and "global" are always available in preload
 // scripts even after they are deleted in "loaded" script.
@@ -31,13 +43,11 @@ Module.wrapper = [
 // init.js, we need to restore it here.
 process.argv.splice(1, 1);
 
-// Clear search paths.
-require('../common/reset-search-paths');
-
 // Import common settings.
 require('@electron/internal/common/init');
 
 const { ipcRendererInternal } = require('@electron/internal/renderer/ipc-renderer-internal') as typeof ipcRendererInternalModule;
+const ipcRendererUtils = require('@electron/internal/renderer/ipc-renderer-internal-utils') as typeof ipcRendererUtilsModule;
 
 process.getProcessMemoryInfo = () => {
   return ipcRendererInternal.invoke<Electron.ProcessMemoryInfo>(IPC_MESSAGES.BROWSER_GET_PROCESS_MEMORY_INFO);
@@ -48,21 +58,14 @@ const { hasSwitch, getSwitchValue } = process._linkedBinding('electron_common_co
 const { mainFrame } = process._linkedBinding('electron_renderer_web_frame');
 
 const nodeIntegration = mainFrame.getWebPreference('nodeIntegration');
-const preloadScript = mainFrame.getWebPreference('preload');
-const preloadScripts = mainFrame.getWebPreference('preloadScripts');
 const appPath = hasSwitch('app-path') ? getSwitchValue('app-path') : null;
-
-// The webContents preload script is loaded after the session preload scripts.
-if (preloadScript) {
-  preloadScripts.push(preloadScript);
-}
 
 // Common renderer initialization
 require('@electron/internal/renderer/common-init');
 
 if (nodeIntegration) {
   // Export node bindings to global.
-  const { makeRequireFunction } = __non_webpack_require__('internal/modules/cjs/helpers') // eslint-disable-line
+  const { makeRequireFunction } = __non_webpack_require__('internal/modules/helpers');
   global.module = new Module('electron/js2c/renderer_init');
   global.require = makeRequireFunction(global.module);
 
@@ -127,14 +130,39 @@ if (nodeIntegration) {
   }
 }
 
-// Load the preload scripts.
-for (const preloadScript of preloadScripts) {
-  try {
-    Module._load(preloadScript);
-  } catch (error) {
-    console.error(`Unable to load preload script: ${preloadScript}`);
-    console.error(error);
+const { appCodeLoaded } = process;
+delete process.appCodeLoaded;
 
-    ipcRendererInternal.send(IPC_MESSAGES.BROWSER_PRELOAD_ERROR, preloadScript, error);
+const { preloadPaths } = ipcRendererUtils.invokeSync<{ preloadPaths: string[] }>(IPC_MESSAGES.BROWSER_NONSANDBOX_LOAD);
+const cjsPreloads = preloadPaths.filter(p => path.extname(p) !== '.mjs');
+const esmPreloads = preloadPaths.filter(p => path.extname(p) === '.mjs');
+if (cjsPreloads.length) {
+  // Load the preload scripts.
+  for (const preloadScript of cjsPreloads) {
+    try {
+      Module._load(preloadScript);
+    } catch (error) {
+      console.error(`Unable to load preload script: ${preloadScript}`);
+      console.error(error);
+
+      ipcRendererInternal.send(IPC_MESSAGES.BROWSER_PRELOAD_ERROR, preloadScript, error);
+    }
   }
+}
+if (esmPreloads.length) {
+  const { runEntryPointWithESMLoader } = __non_webpack_require__('internal/modules/run_main');
+
+  runEntryPointWithESMLoader(async (cascadedLoader: any) => {
+    // Load the preload scripts.
+    for (const preloadScript of esmPreloads) {
+      await cascadedLoader.import(pathToFileURL(preloadScript).toString(), undefined, Object.create(null)).catch((err: Error) => {
+        console.error(`Unable to load preload script: ${preloadScript}`);
+        console.error(err);
+
+        ipcRendererInternal.send(IPC_MESSAGES.BROWSER_PRELOAD_ERROR, preloadScript, err);
+      });
+    }
+  }).finally(() => appCodeLoaded!());
+} else {
+  appCodeLoaded!();
 }

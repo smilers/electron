@@ -28,6 +28,8 @@ On macOS, third-party assistive technology can toggle accessibility features ins
 Electron applications by setting the `AXManualAccessibility` attribute
 programmatically:
 
+Using Objective-C:
+
 ```objc
 CFStringRef kAXManualAccessibility = CFSTR("AXManualAccessibility");
 
@@ -43,7 +45,16 @@ CFStringRef kAXManualAccessibility = CFSTR("AXManualAccessibility");
 }
 ```
 
+Using Swift:
+
+```swift
+import Cocoa
+let name = CommandLine.arguments.count >= 2 ? CommandLine.arguments[1] : "Electron"
+let pid = NSWorkspace.shared.runningApplications.first(where: {$0.localizedName == name})!.processIdentifier
+let axApp = AXUIElementCreateApplication(pid)
+let result = AXUIElementSetAttributeValue(axApp, "AXManualAccessibility" as CFString, true as CFTypeRef)
+print("Setting 'AXManualAccessibility' \(error.rawValue == 0 ? "succeeded" : "failed")")
+```
+
 [a11y-docs]: https://www.chromium.org/developers/design-documents/accessibility#TOC-How-Chrome-detects-the-presence-of-Assistive-Technology
-[a11y-devtools]: https://github.com/GoogleChrome/accessibility-developer-tools
-[a11y-devtools-wiki]: https://github.com/GoogleChrome/accessibility-developer-tools/wiki/Audit-Rules
 [setAccessibilitySupportEnabled]: ../api/app.md#appsetaccessibilitysupportenabledenabled-macos-windows

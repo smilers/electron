@@ -21,9 +21,9 @@
 
 namespace electron {
 
-class AutofillAgent : public content::RenderFrameObserver,
-                      public blink::WebAutofillClient,
-                      public mojom::ElectronAutofillAgent {
+class AutofillAgent : private content::RenderFrameObserver,
+                      private blink::WebAutofillClient,
+                      private mojom::ElectronAutofillAgent {
  public:
   explicit AutofillAgent(content::RenderFrame* frame,
                          blink::AssociatedInterfaceRegistry* registry);
@@ -33,8 +33,9 @@ class AutofillAgent : public content::RenderFrameObserver,
   AutofillAgent(const AutofillAgent&) = delete;
   AutofillAgent& operator=(const AutofillAgent&) = delete;
 
-  void BindReceiver(
-      mojo::PendingAssociatedReceiver<mojom::ElectronAutofillAgent> receiver);
+  void BindPendingReceiver(
+      mojo::PendingAssociatedReceiver<mojom::ElectronAutofillAgent>
+          pending_receiver);
 
   // content::RenderFrameObserver:
   void OnDestruct() override;
@@ -47,15 +48,22 @@ class AutofillAgent : public content::RenderFrameObserver,
 
  private:
   struct ShowSuggestionsOptions {
-    ShowSuggestionsOptions();
-    bool autofill_on_empty_values;
-    bool requires_caret_at_end;
+    // Specifies that suggestions should be shown when |element| contains no
+    // text.
+    bool autofill_on_empty_values{false};
+    // Specifies that suggestions should be shown when the caret is not
+    // after the last character in the element.
+    bool requires_caret_at_end{false};
   };
+
+  // Shuts the AutofillAgent down on RenderFrame deletion. Safe to call multiple
+  // times.
+  void Shutdown();
 
   // blink::WebAutofillClient:
   void TextFieldDidEndEditing(const blink::WebInputElement&) override;
-  void TextFieldDidChange(const blink::WebFormControlElement&) override;
-  void TextFieldDidChangeImpl(const blink::WebFormControlElement&);
+  void TextFieldValueChanged(const blink::WebFormControlElement&) override;
+  void TextFieldValueChangedImpl(const blink::WebFormControlElement&);
   void TextFieldDidReceiveKeyDown(const blink::WebInputElement&,
                                   const blink::WebKeyboardEvent&) override;
   void OpenTextDataListChooser(const blink::WebInputElement&) override;
@@ -72,7 +80,7 @@ class AutofillAgent : public content::RenderFrameObserver,
   void ShowSuggestions(const blink::WebFormControlElement& element,
                        const ShowSuggestionsOptions& options);
 
-  void DoFocusChangeComplete();
+  void HandleFocusChangeComplete();
 
   const mojo::AssociatedRemote<mojom::ElectronAutofillDriver>&
   GetAutofillDriver();

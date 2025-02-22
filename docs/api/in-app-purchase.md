@@ -10,21 +10,23 @@ The `inAppPurchase` module emits the following events:
 
 ### Event: 'transactions-updated'
 
-Emitted when one or more transactions have been updated.
-
 Returns:
 
 * `event` Event
 * `transactions` Transaction[] - Array of [`Transaction`](structures/transaction.md) objects.
 
+Emitted when one or more transactions have been updated.
+
 ## Methods
 
 The `inAppPurchase` module has the following methods:
 
-### `inAppPurchase.purchaseProduct(productID[, quantity])`
+### `inAppPurchase.purchaseProduct(productID[, opts])`
 
-* `productID` string - The identifiers of the product to purchase. (The identifier of `com.example.app.product1` is `product1`).
-* `quantity` Integer (optional) - The number of items the user wants to purchase.
+* `productID` string
+* `opts` Integer | Object (optional) - If specified as an integer, defines the quantity.
+  * `quantity` Integer (optional) - The number of items the user wants to purchase.
+  * `username` string (optional) - The string that associates the transaction with a user account on your service (applicationUsername).
 
 Returns `Promise<boolean>` - Returns `true` if the product is valid and added to the payment queue.
 

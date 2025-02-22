@@ -7,31 +7,37 @@
 #include <fcntl.h>
 #include <stdlib.h>
 
+#if BUILDFLAG(IS_LINUX)
+#include <gtk/gtk.h>
+#endif
+
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/process/launch.h"
+#include "base/strings/strcat.h"
 #include "electron/electron_version.h"
+#include "shell/browser/javascript_environment.h"
 #include "shell/browser/native_window.h"
 #include "shell/browser/window_list.h"
 #include "shell/common/application_info.h"
+#include "shell/common/gin_converters/login_item_settings_converter.h"
+#include "shell/common/thread_restrictions.h"
 
 #if BUILDFLAG(IS_LINUX)
 #include "shell/browser/linux/unity_service.h"
-#include "ui/gtk/gtk_util.h"  // nogncheck
 #endif
 
 namespace electron {
+
+namespace {
 
 const char kXdgSettings[] = "xdg-settings";
 const char kXdgSettingsDefaultSchemeHandler[] = "default-url-scheme-handler";
 
 // The use of the ForTesting flavors is a hack workaround to avoid having to
 // patch these as friends into the associated guard classes.
-class LaunchXdgUtilityScopedAllowBaseSyncPrimitives
+class [[maybe_unused, nodiscard]] LaunchXdgUtilityScopedAllowBaseSyncPrimitives
     : public base::ScopedAllowBaseSyncPrimitivesForTesting {};
-
-class GetXdgAppOutputScopedAllowBlocking
-    : public base::ScopedAllowBlockingForTesting {};
 
 bool LaunchXdgUtility(const std::vector<std::string>& argv, int* exit_code) {
   *exit_code = EXIT_FAILURE;
@@ -51,18 +57,18 @@ bool LaunchXdgUtility(const std::vector<std::string>& argv, int* exit_code) {
   return process.WaitForExit(exit_code);
 }
 
-absl::optional<std::string> GetXdgAppOutput(
+std::optional<std::string> GetXdgAppOutput(
     const std::vector<std::string>& argv) {
   std::string reply;
   int success_code;
-  GetXdgAppOutputScopedAllowBlocking allow_blocking;
+  ScopedAllowBlockingForElectron allow_blocking;
   bool ran_ok = base::GetAppOutputWithExitCode(base::CommandLine(argv), &reply,
                                                &success_code);
 
   if (!ran_ok || success_code != EXIT_SUCCESS)
-    return absl::optional<std::string>();
+    return {};
 
-  return absl::make_optional(reply);
+  return reply;
 }
 
 bool SetDefaultWebClient(const std::string& protocol) {
@@ -83,6 +89,8 @@ bool SetDefaultWebClient(const std::string& protocol) {
   bool ran_ok = LaunchXdgUtility(argv, &exit_code);
   return ran_ok && exit_code == EXIT_SUCCESS;
 }
+
+}  // namespace
 
 void Browser::AddRecentDocument(const base::FilePath& path) {}
 
@@ -106,12 +114,9 @@ bool Browser::IsDefaultProtocolClient(const std::string& protocol,
   const std::vector<std::string> argv = {kXdgSettings, "check",
                                          kXdgSettingsDefaultSchemeHandler,
                                          protocol, desktop_name};
-  const auto output = GetXdgAppOutput(argv);
-  if (!output)
-    return false;
-
   // Allow any reply that starts with "yes".
-  return base::StartsWith(output.value(), "yes", base::CompareCase::SENSITIVE);
+  const std::optional<std::string> output = GetXdgAppOutput(argv);
+  return output && output->starts_with("yes");
 }
 
 // Todo implement
@@ -123,12 +128,12 @@ bool Browser::RemoveAsDefaultProtocolClient(const std::string& protocol,
 std::u16string Browser::GetApplicationNameForProtocol(const GURL& url) {
   const std::vector<std::string> argv = {
       "xdg-mime", "query", "default",
-      std::string("x-scheme-handler/") + url.scheme()};
+      base::StrCat({"x-scheme-handler/", url.scheme_piece()})};
 
   return base::ASCIIToUTF16(GetXdgAppOutput(argv).value_or(std::string()));
 }
 
-bool Browser::SetBadgeCount(absl::optional<int> count) {
+bool Browser::SetBadgeCount(std::optional<int> count) {
   if (IsUnityRunning() && count.has_value()) {
     unity::SetDownloadCount(count.value());
     badge_count_ = count.value();
@@ -140,9 +145,10 @@ bool Browser::SetBadgeCount(absl::optional<int> count) {
 
 void Browser::SetLoginItemSettings(LoginItemSettings settings) {}
 
-Browser::LoginItemSettings Browser::GetLoginItemSettings(
+v8::Local<v8::Value> Browser::GetLoginItemSettings(
     const LoginItemSettings& options) {
-  return LoginItemSettings();
+  LoginItemSettings settings;
+  return gin::ConvertToV8(JavascriptEnvironment::GetIsolate(), settings);
 }
 
 std::string Browser::GetExecutableFileVersion() const {
@@ -164,31 +170,25 @@ bool Browser::IsEmojiPanelSupported() {
 void Browser::ShowAboutPanel() {
   const auto& opts = about_panel_options_;
 
-  if (!opts.is_dict()) {
-    LOG(WARNING) << "Called showAboutPanel(), but didn't use "
-                    "setAboutPanelSettings() first";
-    return;
-  }
-
   GtkWidget* dialogWidget = gtk_about_dialog_new();
   GtkAboutDialog* dialog = GTK_ABOUT_DIALOG(dialogWidget);
 
   const std::string* str;
-  const base::Value* val;
+  const base::Value::List* list;
 
-  if ((str = opts.FindStringKey("applicationName"))) {
+  if ((str = opts.FindString("applicationName"))) {
     gtk_about_dialog_set_program_name(dialog, str->c_str());
   }
-  if ((str = opts.FindStringKey("applicationVersion"))) {
+  if ((str = opts.FindString("applicationVersion"))) {
     gtk_about_dialog_set_version(dialog, str->c_str());
   }
-  if ((str = opts.FindStringKey("copyright"))) {
+  if ((str = opts.FindString("copyright"))) {
     gtk_about_dialog_set_copyright(dialog, str->c_str());
   }
-  if ((str = opts.FindStringKey("website"))) {
+  if ((str = opts.FindString("website"))) {
     gtk_about_dialog_set_website(dialog, str->c_str());
   }
-  if ((str = opts.FindStringKey("iconPath"))) {
+  if ((str = opts.FindString("iconPath"))) {
     GError* error = nullptr;
     constexpr int width = 64;   // width of about panel icon in pixels
     constexpr int height = 64;  // height of about panel icon in pixels
@@ -205,9 +205,9 @@ void Browser::ShowAboutPanel() {
     }
   }
 
-  if ((val = opts.FindListKey("authors"))) {
+  if ((list = opts.FindList("authors"))) {
     std::vector<const char*> cstrs;
-    for (const auto& authorVal : val->GetListDeprecated()) {
+    for (const auto& authorVal : *list) {
       if (authorVal.is_string()) {
         cstrs.push_back(authorVal.GetString().c_str());
       }
@@ -220,11 +220,14 @@ void Browser::ShowAboutPanel() {
     }
   }
 
-  gtk_dialog_run(GTK_DIALOG(dialog));
-  gtk_widget_destroy(dialogWidget);
+  // destroy the widget when it closes
+  g_signal_connect_swapped(dialogWidget, "response",
+                           G_CALLBACK(gtk_widget_destroy), dialogWidget);
+
+  gtk_widget_show_all(dialogWidget);
 }
 
-void Browser::SetAboutPanelOptions(base::DictionaryValue options) {
+void Browser::SetAboutPanelOptions(base::Value::Dict options) {
   about_panel_options_ = std::move(options);
 }
 

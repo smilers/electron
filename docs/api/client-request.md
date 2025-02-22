@@ -2,7 +2,7 @@
 
 > Make HTTP/HTTPS requests.
 
-Process: [Main](../glossary.md#main-process)<br />
+Process: [Main](../glossary.md#main-process), [Utility](../glossary.md#utility-process)<br />
 _This class is not exported from the `'electron'` module. It is only available as a return value of other methods in the Electron API._
 
 `ClientRequest` implements the [Writable Stream](https://nodejs.org/api/stream.html#stream_writable_streams)
@@ -17,18 +17,22 @@ following properties:
     method.
   * `url` string (optional) - The request URL. Must be provided in the absolute
     form with the protocol scheme specified as http or https.
+  * `headers` Record\<string, string | string[]\> (optional) - Headers to be sent
+    with the request.
   * `session` Session (optional) - The [`Session`](session.md) instance with
     which the request is associated.
   * `partition` string (optional) - The name of the [`partition`](session.md)
     with which the request is associated. Defaults to the empty string. The
     `session` option supersedes `partition`. Thus if a `session` is explicitly
     specified, `partition` is ignored.
-  * `credentials` string (optional) - Can be `include` or `omit`. Whether to
-    send [credentials](https://fetch.spec.whatwg.org/#credentials) with this
+  * `credentials` string (optional) - Can be `include`, `omit` or
+    `same-origin`. Whether to send
+    [credentials](https://fetch.spec.whatwg.org/#credentials) with this
     request. If set to `include`, credentials from the session associated with
     the request will be used. If set to `omit`, credentials will not be sent
     with the request (and the `'login'` event will not be triggered in the
-    event of a 401). This matches the behavior of the
+    event of a 401). If set to `same-origin`, `origin` must also be specified.
+    This matches the behavior of the
     [fetch](https://fetch.spec.whatwg.org/#concept-request-credentials-mode)
     option of the same name. If this option is not specified, authentication
     data from the session will be sent, and cookies will not be sent (unless
@@ -49,6 +53,13 @@ following properties:
     [`request.followRedirect`](#requestfollowredirect) is invoked synchronously
     during the [`redirect`](#event-redirect) event.  Defaults to `follow`.
   * `origin` string (optional) - The origin URL of the request.
+  * `referrerPolicy` string (optional) - can be "", `no-referrer`,
+    `no-referrer-when-downgrade`, `origin`, `origin-when-cross-origin`,
+    `unsafe-url`, `same-origin`, `strict-origin`, or
+    `strict-origin-when-cross-origin`. Defaults to
+    `strict-origin-when-cross-origin`.
+  * `cache` string (optional) - can be `default`, `no-store`, `reload`,
+    `no-cache`, `force-cache` or `only-if-cached`.
 
 `options` properties such as `protocol`, `host`, `hostname`, `port` and `path`
 strictly follow the Node.js model as described in the
@@ -56,7 +67,7 @@ strictly follow the Node.js model as described in the
 
 For instance, we could have created the same request to 'github.com' as follows:
 
-```JavaScript
+```js
 const request = net.request({
   method: 'GET',
   protocol: 'https:',
@@ -95,7 +106,7 @@ The `callback` function is expected to be called back with user credentials:
 * `username` string
 * `password` string
 
-```JavaScript
+```js @ts-type={request:Electron.ClientRequest}
 request.on('login', (authInfo, callback) => {
   callback('username', 'password')
 })
@@ -104,9 +115,9 @@ request.on('login', (authInfo, callback) => {
 Providing empty credentials will cancel the request and report an authentication
 error on the response object:
 
-```JavaScript
+```js @ts-type={request:Electron.ClientRequest}
 request.on('response', (response) => {
-  console.log(`STATUS: ${response.statusCode}`);
+  console.log(`STATUS: ${response.statusCode}`)
   response.on('error', (error) => {
     console.log(`ERROR: ${JSON.stringify(error)}`)
   })
@@ -149,7 +160,7 @@ Returns:
 * `statusCode` Integer
 * `method` string
 * `redirectUrl` string
-* `responseHeaders` Record<string, string[]>
+* `responseHeaders` Record\<string, string[]\>
 
 Emitted when the server returns a redirect response (e.g. 301 Moved
 Permanently). Calling [`request.followRedirect`](#requestfollowredirect) will
@@ -233,6 +244,8 @@ it is not allowed to add or remove a custom header.
 * `chunk` (string | Buffer) (optional)
 * `encoding` string (optional)
 * `callback` Function (optional)
+
+Returns `this`.
 
 Sends the last chunk of the request data. Subsequent write or end operations
 will not be allowed. The `finish` event is emitted just after the end operation.

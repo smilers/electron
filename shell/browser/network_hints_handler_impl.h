@@ -5,6 +5,7 @@
 #ifndef ELECTRON_SHELL_BROWSER_NETWORK_HINTS_HANDLER_IMPL_H_
 #define ELECTRON_SHELL_BROWSER_NETWORK_HINTS_HANDLER_IMPL_H_
 
+#include "base/memory/raw_ptr.h"
 #include "components/network_hints/browser/simple_network_hints_handler_impl.h"
 
 namespace content {
@@ -23,12 +24,13 @@ class NetworkHintsHandlerImpl
           receiver);
 
   // network_hints::mojom::NetworkHintsHandler:
-  void Preconnect(const GURL& url, bool allow_credentials) override;
+  void Preconnect(const url::SchemeHostPort& url,
+                  bool allow_credentials) override;
 
  private:
   explicit NetworkHintsHandlerImpl(content::RenderFrameHost*);
 
-  content::BrowserContext* browser_context_ = nullptr;
+  raw_ptr<content::BrowserContext> browser_context_ = nullptr;
 };
 
 #endif  // ELECTRON_SHELL_BROWSER_NETWORK_HINTS_HANDLER_IMPL_H_

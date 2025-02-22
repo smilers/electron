@@ -79,7 +79,7 @@ immediately updates the escape item in the touch bar.
 Below is an example of a simple slot machine touch bar game with a button
 and some labels.
 
-```javascript
+```js
 const { app, BrowserWindow, TouchBar } = require('electron')
 
 const { TouchBarLabel, TouchBarButton, TouchBarSpacer } = TouchBar
@@ -87,12 +87,12 @@ const { TouchBarLabel, TouchBarButton, TouchBarSpacer } = TouchBar
 let spinning = false
 
 // Reel labels
-const reel1 = new TouchBarLabel()
-const reel2 = new TouchBarLabel()
-const reel3 = new TouchBarLabel()
+const reel1 = new TouchBarLabel({ label: '' })
+const reel2 = new TouchBarLabel({ label: '' })
+const reel3 = new TouchBarLabel({ label: '' })
 
 // Spin result label
-const result = new TouchBarLabel()
+const result = new TouchBarLabel({ label: '' })
 
 // Spin button
 const spin = new TouchBarButton({

@@ -110,20 +110,49 @@ $ export CHROMIUM_BUILDTOOLS_PATH=`pwd`/buildtools
 On Windows:
 
 ```sh
+# cmd
 $ cd src
 $ set CHROMIUM_BUILDTOOLS_PATH=%cd%\buildtools
+
+# PowerShell
+$ cd src
+$ $env:CHROMIUM_BUILDTOOLS_PATH = "$(Get-Location)\buildtools"
 ```
 
 **To generate Testing build config of Electron:**
+
+On Linux & MacOS
 
 ```sh
 $ gn gen out/Testing --args="import(\"//electron/build/args/testing.gn\")"
 ```
 
+On Windows:
+
+```sh
+# cmd
+$ gn gen out/Testing --args="import(\"//electron/build/args/testing.gn\")"
+
+# PowerShell
+gn gen out/Testing --args="import(\`"//electron/build/args/testing.gn\`")"
+```
+
 **To generate Release build config of Electron:**
+
+On Linux & MacOS
 
 ```sh
 $ gn gen out/Release --args="import(\"//electron/build/args/release.gn\")"
+```
+
+On Windows:
+
+```sh
+# cmd
+$ gn gen out/Release --args="import(\"//electron/build/args/release.gn\")"
+
+# PowerShell
+$ gn gen out/Release --args="import(\`"//electron/build/args/release.gn\`")"
 ```
 
 **Note:** This will generate a `out/Testing` or `out/Release` build directory under `src/` with the testing or release build depending upon the configuration passed above. You can replace `Testing|Release` with another names, but it should be a subdirectory of `out`.
@@ -146,7 +175,7 @@ $ ninja -C out/Release electron
 ```
 
 This will build all of what was previously 'libchromiumcontent' (i.e. the
-`content/` directory of `chromium` and its dependencies, incl. WebKit and V8),
+`content/` directory of `chromium` and its dependencies, incl. Blink and V8),
 so it will take a while.
 
 The built executable will be under `./out/Testing`:
@@ -225,7 +254,7 @@ generate build headers for the modules to compile against, run the following
 under `src/` directory.
 
 ```sh
-$ ninja -C out/Testing third_party/electron_node:headers
+$ ninja -C out/Testing electron:node_headers
 ```
 
 You can now [run the tests](testing.md#unit-tests).
@@ -281,9 +310,26 @@ $ cd electron
 $ gclient sync -f
 ```
 
+This may also happen if you have checked out a branch (as opposed to having a detached head) in `electron/src/`
+or some other dependency’s repository. If that is the case, a `git checkout --detach HEAD` in the appropriate repository should do the trick.
+
 ### I'm being asked for a username/password for chromium-internal.googlesource.com
 
 If you see a prompt for `Username for 'https://chrome-internal.googlesource.com':` when running `gclient sync` on Windows, it's probably because the `DEPOT_TOOLS_WIN_TOOLCHAIN` environment variable is not set to 0. Open `Control Panel` → `System and Security` → `System` → `Advanced system settings` and add a system variable
 `DEPOT_TOOLS_WIN_TOOLCHAIN` with value `0`.  This tells `depot_tools` to use
 your locally installed version of Visual Studio (by default, `depot_tools` will
 try to download a Google-internal version that only Googlers have access to).
+
+### `e` Module not found
+
+If `e` is not recognized despite running `npm i -g @electron/build-tools`, ie:
+
+```sh
+Error: Cannot find module '/Users/<user>/.electron_build_tools/src/e'
+```
+
+We recommend installing Node through [nvm](https://github.com/nvm-sh/nvm). This allows for easier Node version management, and is often a fix for missing `e` modules.
+
+### RBE authentication randomly fails with "Token not valid"
+
+This could be caused by the local clock time on the machine being off by a small amount. Use [time.is](https://time.is/) to check.

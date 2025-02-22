@@ -72,7 +72,7 @@ The `menu` object has the following instance methods:
 #### `menu.popup([options])`
 
 * `options` Object (optional)
-  * `window` [BrowserWindow](browser-window.md) (optional) - Default is the focused window.
+  * `window` [BaseWindow](base-window.md) (optional) - Default is the focused window.
   * `x` number (optional) - Default is the current mouse cursor position.
     Must be declared if `y` is declared.
   * `y` number (optional) - Default is the current mouse cursor position.
@@ -80,15 +80,19 @@ The `menu` object has the following instance methods:
   * `positioningItem` number (optional) _macOS_ - The index of the menu item to
     be positioned under the mouse cursor at the specified coordinates. Default
     is -1.
+  * `sourceType` string (optional) _Windows_ _Linux_ - This should map to the `menuSourceType`
+    provided by the `context-menu` event. It is not recommended to set this value manually,
+    only provide values you receive from other APIs or leave it `undefined`.
+    Can be `none`, `mouse`, `keyboard`, `touch`, `touchMenu`, `longPress`, `longTap`, `touchHandle`, `stylus`, `adjustSelection`, or `adjustSelectionReset`.
   * `callback` Function (optional) - Called when menu is closed.
 
-Pops up this menu as a context menu in the [`BrowserWindow`](browser-window.md).
+Pops up this menu as a context menu in the [`BaseWindow`](base-window.md).
 
-#### `menu.closePopup([browserWindow])`
+#### `menu.closePopup([window])`
 
-* `browserWindow` [BrowserWindow](browser-window.md) (optional) - Default is the focused window.
+* `window` [BaseWindow](base-window.md) (optional) - Default is the focused window.
 
-Closes the context menu in the `browserWindow`.
+Closes the context menu in the `window`.
 
 #### `menu.append(menuItem)`
 
@@ -147,27 +151,29 @@ can have a submenu.
 
 An example of creating the application menu with the simple template API:
 
-```javascript
+```js @ts-expect-error=[107]
 const { app, Menu } = require('electron')
 
 const isMac = process.platform === 'darwin'
 
 const template = [
   // { role: 'appMenu' }
-  ...(isMac ? [{
-    label: app.name,
-    submenu: [
-      { role: 'about' },
-      { type: 'separator' },
-      { role: 'services' },
-      { type: 'separator' },
-      { role: 'hide' },
-      { role: 'hideOthers' },
-      { role: 'unhide' },
-      { type: 'separator' },
-      { role: 'quit' }
-    ]
-  }] : []),
+  ...(isMac
+    ? [{
+        label: app.name,
+        submenu: [
+          { role: 'about' },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hide' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit' }
+        ]
+      }]
+    : []),
   // { role: 'fileMenu' }
   {
     label: 'File',
@@ -185,23 +191,25 @@ const template = [
       { role: 'cut' },
       { role: 'copy' },
       { role: 'paste' },
-      ...(isMac ? [
-        { role: 'pasteAndMatchStyle' },
-        { role: 'delete' },
-        { role: 'selectAll' },
-        { type: 'separator' },
-        {
-          label: 'Speech',
-          submenu: [
-            { role: 'startSpeaking' },
-            { role: 'stopSpeaking' }
+      ...(isMac
+        ? [
+            { role: 'pasteAndMatchStyle' },
+            { role: 'delete' },
+            { role: 'selectAll' },
+            { type: 'separator' },
+            {
+              label: 'Speech',
+              submenu: [
+                { role: 'startSpeaking' },
+                { role: 'stopSpeaking' }
+              ]
+            }
           ]
-        }
-      ] : [
-        { role: 'delete' },
-        { type: 'separator' },
-        { role: 'selectAll' }
-      ])
+        : [
+            { role: 'delete' },
+            { type: 'separator' },
+            { role: 'selectAll' }
+          ])
     ]
   },
   // { role: 'viewMenu' }
@@ -225,14 +233,16 @@ const template = [
     submenu: [
       { role: 'minimize' },
       { role: 'zoom' },
-      ...(isMac ? [
-        { type: 'separator' },
-        { role: 'front' },
-        { type: 'separator' },
-        { role: 'window' }
-      ] : [
-        { role: 'close' }
-      ])
+      ...(isMac
+        ? [
+            { type: 'separator' },
+            { role: 'front' },
+            { type: 'separator' },
+            { role: 'window' }
+          ]
+        : [
+            { role: 'close' }
+          ])
     ]
   },
   {
@@ -261,7 +271,7 @@ menu on behalf of the renderer.
 
 Below is an example of showing a menu when the user right clicks the page:
 
-```js
+```js @ts-expect-error=[21]
 // renderer
 window.addEventListener('contextmenu', (e) => {
   e.preventDefault()
@@ -283,7 +293,7 @@ ipcMain.on('show-context-menu', (event) => {
     { label: 'Menu Item 2', type: 'checkbox', checked: true }
   ]
   const menu = Menu.buildFromTemplate(template)
-  menu.popup(BrowserWindow.fromWebContents(event.sender))
+  menu.popup({ window: BrowserWindow.fromWebContents(event.sender) })
 })
 ```
 
@@ -317,7 +327,7 @@ name, no matter what label you set. To change it, modify your app bundle's
 [About Information Property List Files][AboutInformationPropertyListFiles]
 for more information.
 
-## Setting Menu for Specific Browser Window (*Linux* *Windows*)
+## Setting Menu for Specific Browser Window (_Linux_ _Windows_)
 
 The [`setMenu` method][setMenu] of browser windows can set the menu of certain
 browser windows.
@@ -326,16 +336,16 @@ browser windows.
 
 You can make use of `before`, `after`, `beforeGroupContaining`, `afterGroupContaining` and `id` to control how the item will be placed when building a menu with `Menu.buildFromTemplate`.
 
-* `before` - Inserts this item before the item with the specified label. If the
+* `before` - Inserts this item before the item with the specified id. If the
   referenced item doesn't exist the item will be inserted at the end of
   the menu. Also implies that the menu item in question should be placed in the same “group” as the item.
-* `after` - Inserts this item after the item with the specified label. If the
+* `after` - Inserts this item after the item with the specified id. If the
   referenced item doesn't exist the item will be inserted at the end of
   the menu. Also implies that the menu item in question should be placed in the same “group” as the item.
 * `beforeGroupContaining` - Provides a means for a single context menu to declare
-  the placement of their containing group before the containing group of the item with the specified label.
+  the placement of their containing group before the containing group of the item with the specified id.
 * `afterGroupContaining` - Provides a means for a single context menu to declare
-  the placement of their containing group after the containing group of the item with the specified label.
+  the placement of their containing group after the containing group of the item with the specified id.
 
 By default, items will be inserted in the order they exist in the template unless one of the specified positioning keywords is used.
 
@@ -343,7 +353,7 @@ By default, items will be inserted in the order they exist in the template unles
 
 Template:
 
-```javascript
+```js
 [
   { id: '1', label: 'one' },
   { id: '2', label: 'two' },
@@ -363,7 +373,7 @@ Menu:
 
 Template:
 
-```javascript
+```js
 [
   { id: '1', label: 'one' },
   { type: 'separator' },
@@ -387,7 +397,7 @@ Menu:
 
 Template:
 
-```javascript
+```js
 [
   { id: '1', label: 'one', after: ['3'] },
   { id: '2', label: 'two', before: ['1'] },

@@ -8,6 +8,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "shell/browser/api/electron_api_web_frame_main.h"
 #include "shell/common/gin_helper/accessor.h"
+#include "shell/common/node_util.h"
 
 namespace gin {
 
@@ -16,6 +17,13 @@ namespace {
 v8::Persistent<v8::ObjectTemplate> rfh_templ;
 
 }  // namespace
+
+// static
+v8::Local<v8::Value> Converter<content::FrameTreeNodeId>::ToV8(
+    v8::Isolate* isolate,
+    const content::FrameTreeNodeId& val) {
+  return v8::Number::New(isolate, val.value());
+}
 
 // static
 v8::Local<v8::Value> Converter<content::RenderFrameHost*>::ToV8(
@@ -27,6 +35,19 @@ v8::Local<v8::Value> Converter<content::RenderFrameHost*>::ToV8(
 }
 
 // static
+bool Converter<content::RenderFrameHost*>::FromV8(
+    v8::Isolate* isolate,
+    v8::Local<v8::Value> val,
+    content::RenderFrameHost** out) {
+  electron::api::WebFrameMain* web_frame_main = nullptr;
+  if (!ConvertFromV8(isolate, val, &web_frame_main))
+    return false;
+  *out = web_frame_main->render_frame_host();
+
+  return true;
+}
+
+// static
 v8::Local<v8::Value>
 Converter<gin_helper::AccessorValue<content::RenderFrameHost*>>::ToV8(
     v8::Isolate* isolate,
@@ -35,7 +56,7 @@ Converter<gin_helper::AccessorValue<content::RenderFrameHost*>>::ToV8(
   if (!rfh)
     return v8::Null(isolate);
 
-  const int process_id = rfh->GetProcess()->GetID();
+  const int32_t process_id = rfh->GetProcess()->GetID().GetUnsafeValue();
   const int routing_id = rfh->GetRoutingID();
 
   if (rfh_templ.IsEmpty()) {
@@ -68,8 +89,10 @@ bool Converter<gin_helper::AccessorValue<content::RenderFrameHost*>>::FromV8(
   if (rfh_obj->InternalFieldCount() != 2)
     return false;
 
-  v8::Local<v8::Value> process_id_wrapper = rfh_obj->GetInternalField(0);
-  v8::Local<v8::Value> routing_id_wrapper = rfh_obj->GetInternalField(1);
+  v8::Local<v8::Value> process_id_wrapper =
+      rfh_obj->GetInternalField(0).As<v8::Value>();
+  v8::Local<v8::Value> routing_id_wrapper =
+      rfh_obj->GetInternalField(1).As<v8::Value>();
 
   if (process_id_wrapper.IsEmpty() || !process_id_wrapper->IsNumber() ||
       routing_id_wrapper.IsEmpty() || !routing_id_wrapper->IsNumber())
@@ -79,8 +102,17 @@ bool Converter<gin_helper::AccessorValue<content::RenderFrameHost*>>::FromV8(
   const int routing_id = routing_id_wrapper.As<v8::Number>()->Value();
 
   auto* rfh = content::RenderFrameHost::FromID(process_id, routing_id);
-  if (!rfh)
-    return false;
+
+  if (!rfh) {
+    // Lazily evaluted property accessed after RFH has been destroyed.
+    // Continue to return nullptr, but emit warning to inform developers
+    // what occurred.
+    electron::util::EmitWarning(
+        isolate,
+        "Frame property was accessed after it navigated or was destroyed. "
+        "Avoid asynchronous tasks prior to indexing.",
+        "electron");
+  }
 
   out->Value = rfh;
   return true;

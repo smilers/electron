@@ -7,14 +7,12 @@
 #include <utility>
 
 #include "base/auto_reset.h"
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/task/task_runner_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "extensions/browser/extension_file_task_runner.h"
@@ -96,7 +94,9 @@ std::pair<scoped_refptr<const Extension>, std::string> LoadUnpacked(
 ElectronExtensionLoader::ElectronExtensionLoader(
     content::BrowserContext* browser_context)
     : browser_context_(browser_context),
-      extension_registrar_(browser_context, this) {}
+      extension_registrar_(ExtensionRegistrar::Get(browser_context)) {
+  extension_registrar_->SetDelegate(this);
+}
 
 ElectronExtensionLoader::~ElectronExtensionLoader() = default;
 
@@ -104,9 +104,8 @@ void ElectronExtensionLoader::LoadExtension(
     const base::FilePath& extension_dir,
     int load_flags,
     base::OnceCallback<void(const Extension*, const std::string&)> cb) {
-  base::PostTaskAndReplyWithResult(
-      GetExtensionFileTaskRunner().get(), FROM_HERE,
-      base::BindOnce(&LoadUnpacked, extension_dir, load_flags),
+  GetExtensionFileTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&LoadUnpacked, extension_dir, load_flags),
       base::BindOnce(&ElectronExtensionLoader::FinishExtensionLoad,
                      weak_factory_.GetWeakPtr(), std::move(cb)));
 }
@@ -122,7 +121,8 @@ void ElectronExtensionLoader::ReloadExtension(const ExtensionId& extension_id) {
   DCHECK_EQ(false, did_schedule_reload_);
   base::AutoReset<bool> reset_did_schedule_reload(&did_schedule_reload_, false);
 
-  extension_registrar_.ReloadExtension(extension_id, LoadErrorBehavior::kQuiet);
+  extension_registrar_->ReloadExtension(extension_id,
+                                        LoadErrorBehavior::kQuiet);
   if (did_schedule_reload_)
     return;
 }
@@ -130,7 +130,7 @@ void ElectronExtensionLoader::ReloadExtension(const ExtensionId& extension_id) {
 void ElectronExtensionLoader::UnloadExtension(
     const ExtensionId& extension_id,
     extensions::UnloadedExtensionReason reason) {
-  extension_registrar_.RemoveExtension(extension_id, reason);
+  extension_registrar_->RemoveExtension(extension_id, reason);
 }
 
 void ElectronExtensionLoader::FinishExtensionLoad(
@@ -138,7 +138,7 @@ void ElectronExtensionLoader::FinishExtensionLoad(
     std::pair<scoped_refptr<const Extension>, std::string> result) {
   scoped_refptr<const Extension> extension = result.first;
   if (extension) {
-    extension_registrar_.AddExtension(extension);
+    extension_registrar_->AddExtension(extension);
 
     // Write extension install time to ExtensionPrefs. This is required by
     // WebRequestAPI which calls extensions::ExtensionPrefs::GetInstallTime.
@@ -150,10 +150,11 @@ void ElectronExtensionLoader::FinishExtensionLoad(
       ExtensionPrefs::ScopedDictionaryUpdate update(
           extension_prefs, extension.get()->id(),
           extensions::pref_names::kPrefPreferences);
+
       auto preference = update.Create();
-      const base::Time install_time = base::Time::Now();
-      preference->SetString(
-          "install_time", base::NumberToString(install_time.ToInternalValue()));
+      const int64_t now_usec =
+          base::Time::Now().since_origin().InMicroseconds();
+      preference->SetString("install_time", base::NumberToString(now_usec));
     }
   }
 
@@ -165,7 +166,7 @@ void ElectronExtensionLoader::FinishExtensionReload(
     std::pair<scoped_refptr<const Extension>, std::string> result) {
   scoped_refptr<const Extension> extension = result.first;
   if (extension) {
-    extension_registrar_.AddExtension(extension);
+    extension_registrar_->AddExtension(extension);
   }
 }
 
@@ -183,8 +184,7 @@ void ElectronExtensionLoader::PreAddExtension(const Extension* extension,
     extension_prefs->RemoveDisableReason(extension->id(),
                                          disable_reason::DISABLE_RELOAD);
     // Only re-enable the extension if there are no other disable reasons.
-    if (extension_prefs->GetDisableReasons(extension->id()) ==
-        disable_reason::DISABLE_NONE) {
+    if (extension_prefs->GetDisableReasons(extension->id()).empty()) {
       extension_prefs->SetExtensionEnabled(extension->id());
     }
   }
@@ -194,6 +194,16 @@ void ElectronExtensionLoader::PostActivateExtension(
     scoped_refptr<const Extension> extension) {}
 
 void ElectronExtensionLoader::PostDeactivateExtension(
+    scoped_refptr<const Extension> extension) {}
+
+void ElectronExtensionLoader::PreUninstallExtension(
+    scoped_refptr<const Extension> extension) {}
+
+void ElectronExtensionLoader::PostUninstallExtension(
+    scoped_refptr<const Extension> extension,
+    base::OnceClosure done_callback) {}
+
+void ElectronExtensionLoader::PostNotifyUninstallExtension(
     scoped_refptr<const Extension> extension) {}
 
 void ElectronExtensionLoader::LoadExtensionForReload(
@@ -206,12 +216,21 @@ void ElectronExtensionLoader::LoadExtensionForReload(
   // when loading this extension and retain it here. As is, reloading an
   // extension will cause the file access permission to be dropped.
   int load_flags = Extension::FOLLOW_SYMLINKS_ANYWHERE;
-  base::PostTaskAndReplyWithResult(
-      GetExtensionFileTaskRunner().get(), FROM_HERE,
-      base::BindOnce(&LoadUnpacked, path, load_flags),
+  GetExtensionFileTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&LoadUnpacked, path, load_flags),
       base::BindOnce(&ElectronExtensionLoader::FinishExtensionReload,
                      weak_factory_.GetWeakPtr(), extension_id));
   did_schedule_reload_ = true;
+}
+
+void ElectronExtensionLoader::ShowExtensionDisabledError(
+    const Extension* extension,
+    bool is_remote_install) {}
+
+void ElectronExtensionLoader::FinishDelayedInstallationsIfAny() {}
+
+bool ElectronExtensionLoader::CanAddExtension(const Extension* extension) {
+  return true;
 }
 
 bool ElectronExtensionLoader::CanEnableExtension(const Extension* extension) {

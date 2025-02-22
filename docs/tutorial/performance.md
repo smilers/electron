@@ -24,7 +24,7 @@ careful to understand that the term "performance" means different things for
 a Node.js backend than it does for an application running on a client.
 
 This list is provided for your convenience – and is, much like our
-[security checklist][security] – not meant to exhaustive. It is probably possible
+[security checklist][security] – not meant to be exhaustive. It is probably possible
 to build a slow Electron app that follows all the steps outlined below. Electron
 is a powerful development platform that enables you, the developer, to do more
 or less whatever you want. All that freedom means that performance is largely
@@ -54,7 +54,7 @@ at once, consider the [Chrome Tracing](https://www.chromium.org/developers/how-t
 
 ### Recommended Reading
 
-* [Get Started With Analyzing Runtime Performance][chrome-devtools-tutorial]
+* [Analyze runtime performance][chrome-devtools-tutorial]
 * [Talk: "Visual Studio Code - The First Second"][vscode-first-second]
 
 ## Checklist: Performance recommendations
@@ -69,6 +69,7 @@ resource-hungry if you attempt these steps.
 5. [Unnecessary polyfills](#5-unnecessary-polyfills)
 6. [Unnecessary or blocking network requests](#6-unnecessary-or-blocking-network-requests)
 7. [Bundle your code](#7-bundle-your-code)
+8. [Call `Menu.setApplicationMenu(null)` when you do not need a default menu](#8-call-menusetapplicationmenunull-when-you-do-not-need-a-default-menu)
 
 ### 1. Carelessly including modules
 
@@ -82,7 +83,7 @@ is not in fact the leanest or smallest one available.
 
 The reasoning behind this recommendation is best illustrated with a real-world
 example. During the early days of Electron, reliable detection of network
-connectivity was a problem, resulting many apps to use a module that exposed a
+connectivity was a problem, resulting in many apps using a module that exposed a
 simple `isOnline()` method.
 
 That module detected your network connectivity by attempting to reach out to a
@@ -172,8 +173,8 @@ in the fictitious `.foo` format. In order to do that, it relies on the
 equally fictitious `foo-parser` module. In traditional Node.js development,
 you might write code that eagerly loads dependencies:
 
-```js title='parser.js'
-const fs = require('fs')
+```js title='parser.js' @ts-expect-error=[2]
+const fs = require('node:fs')
 const fooParser = require('foo-parser')
 
 class Parser {
@@ -195,16 +196,16 @@ In the above example, we're doing a lot of work that's being executed as soon
 as the file is loaded. Do we need to get parsed files right away? Could we
 do this work a little later, when `getParsedFiles()` is actually called?
 
-```js title='parser.js'
+```js title='parser.js' @ts-expect-error=[20]
 // "fs" is likely already being loaded, so the `require()` call is cheap
-const fs = require('fs')
+const fs = require('node:fs')
 
 class Parser {
   async getFiles () {
     // Touch the disk as soon as `getFiles` is called, not sooner.
     // Also, ensure that we're not blocking other operations by using
     // the asynchronous version.
-    this.files = this.files || await fs.readdir('.')
+    this.files = this.files || await fs.promises.readdir('.')
 
     return this.files
   }
@@ -295,13 +296,13 @@ browsers apply to Electron's renderers, too. The two primary tools at your
 disposal  are currently `requestIdleCallback()` for small operations and
 `Web Workers` for long-running operations.
 
-*`requestIdleCallback()`* allows developers to queue up a function to be
+_`requestIdleCallback()`_ allows developers to queue up a function to be
 executed as soon as the process is entering an idle period. It enables you to
 perform low-priority or background work without impacting the user experience.
 For more information about how to use it,
 [check out its documentation on MDN][request-idle-callback].
 
-*Web Workers* are a powerful tool to run code on a separate thread. There are
+_Web Workers_ are a powerful tool to run code on a separate thread. There are
 some caveats to consider – consult Electron's
 [multithreading documentation][multithreading] and the
 [MDN documentation for Web Workers][web-workers]. They're an ideal solution
@@ -419,14 +420,25 @@ environment that needs to handle both Node.js and browser environments.
 As of writing this article, the popular choices include [Webpack][webpack],
 [Parcel][parcel], and [rollup.js][rollup].
 
+### 8. Call `Menu.setApplicationMenu(null)` when you do not need a default menu
+
+Electron will set a default menu on startup with some standard entries. But there are reasons your application might want to change that and it will benefit startup performance.
+
+#### Why?
+
+If you build your own menu or use a frameless window without native menu, you should tell Electron early enough to not setup the default menu.
+
+#### How?
+
+Call `Menu.setApplicationMenu(null)` before `app.on("ready")`. This will prevent Electron from setting a default menu. See also https://github.com/electron/electron/issues/35512 for a related discussion.
+
 [security]: ./security.md
-[chrome-devtools-tutorial]: https://developers.google.com/web/tools/chrome-devtools/evaluate-performance/
+[chrome-devtools-tutorial]: https://developer.chrome.com/docs/devtools/performance/
 [worker-threads]: https://nodejs.org/api/worker_threads.html
 [web-workers]: https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers
 [request-idle-callback]: https://developer.mozilla.org/en-US/docs/Web/API/Window/requestIdleCallback
 [multithreading]: ./multithreading.md
-[caniuse]: https://caniuse.com/
-[jquery-need]: http://youmightnotneedjquery.com/
+[jquery-need]: https://youmightnotneedjquery.com/
 [service-workers]: https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API
 [webpack]: https://webpack.js.org/
 [parcel]: https://parceljs.org/

@@ -5,11 +5,12 @@
 #ifndef ELECTRON_SHELL_BROWSER_UI_MESSAGE_BOX_H_
 #define ELECTRON_SHELL_BROWSER_UI_MESSAGE_BOX_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "ui/gfx/image/image_skia.h"
 
 namespace electron {
@@ -25,10 +26,10 @@ enum class MessageBoxType {
 };
 
 struct MessageBoxSettings {
-  electron::NativeWindow* parent_window = nullptr;
+  RAW_PTR_EXCLUSION electron::NativeWindow* parent_window = nullptr;
   MessageBoxType type = electron::MessageBoxType::kNone;
   std::vector<std::string> buttons;
-  absl::optional<int> id;
+  std::optional<int> id;
   int default_id;
   int cancel_id;
   bool no_link = false;

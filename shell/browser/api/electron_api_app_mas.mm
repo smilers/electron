@@ -10,14 +10,11 @@
 
 #include "base/strings/sys_string_conversions.h"
 
-namespace electron {
-
-namespace api {
+namespace electron::api {
 
 // Callback passed to js which will stop accessing the given bookmark.
 void OnStopAccessingSecurityScopedResource(NSURL* bookmarkUrl) {
   [bookmarkUrl stopAccessingSecurityScopedResource];
-  [bookmarkUrl release];
 }
 
 // Get base64 encoded NSData, create a bookmark for it and start accessing it.
@@ -56,14 +53,9 @@ base::RepeatingCallback<void()> App::StartAccessingSecurityScopedResource(
     [bookmarkUrl startAccessingSecurityScopedResource];
   }
 
-  // Stop the NSURL from being GC'd.
-  [bookmarkUrl retain];
-
   // Return a js callback which will close the bookmark.
   return base::BindRepeating(&OnStopAccessingSecurityScopedResource,
                              bookmarkUrl);
 }
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api

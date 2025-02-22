@@ -6,7 +6,6 @@
 
 #include <memory>
 #include <set>
-#include <string>
 
 #include "shell/renderer/renderer_client_base.h"
 
@@ -35,16 +34,31 @@ class ElectronSandboxedRendererClient : public RendererClientBase {
                           v8::Local<v8::Context> context,
                           content::RenderFrame* render_frame);
   // electron::RendererClientBase:
-  void DidCreateScriptContext(v8::Handle<v8::Context> context,
+  void DidCreateScriptContext(v8::Local<v8::Context> context,
                               content::RenderFrame* render_frame) override;
-  void WillReleaseScriptContext(v8::Handle<v8::Context> context,
+  void WillReleaseScriptContext(v8::Local<v8::Context> context,
                                 content::RenderFrame* render_frame) override;
   // content::ContentRendererClient:
   void RenderFrameCreated(content::RenderFrame*) override;
   void RunScriptsAtDocumentStart(content::RenderFrame* render_frame) override;
   void RunScriptsAtDocumentEnd(content::RenderFrame* render_frame) override;
+  void WillEvaluateServiceWorkerOnWorkerThread(
+      blink::WebServiceWorkerContextProxy* context_proxy,
+      v8::Local<v8::Context> v8_context,
+      int64_t service_worker_version_id,
+      const GURL& service_worker_scope,
+      const GURL& script_url,
+      const blink::ServiceWorkerToken& service_worker_token) override;
+  void WillDestroyServiceWorkerContextOnWorkerThread(
+      v8::Local<v8::Context> context,
+      int64_t service_worker_version_id,
+      const GURL& service_worker_scope,
+      const GURL& script_url) override;
 
  private:
+  void EmitProcessEvent(content::RenderFrame* render_frame,
+                        const char* event_name);
+
   std::unique_ptr<base::ProcessMetrics> metrics_;
 
   // Getting main script context from web frame would lazily initializes

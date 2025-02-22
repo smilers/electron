@@ -15,15 +15,14 @@
 #include "shell/browser/lib/power_observer_linux.h"
 #endif
 
-namespace electron {
+namespace electron::api {
 
-namespace api {
-
-class PowerMonitor : public gin::Wrappable<PowerMonitor>,
-                     public gin_helper::EventEmitterMixin<PowerMonitor>,
-                     public gin_helper::Pinnable<PowerMonitor>,
-                     public base::PowerStateObserver,
-                     public base::PowerSuspendObserver {
+class PowerMonitor final : public gin::Wrappable<PowerMonitor>,
+                           public gin_helper::EventEmitterMixin<PowerMonitor>,
+                           public gin_helper::Pinnable<PowerMonitor>,
+                           private base::PowerStateObserver,
+                           private base::PowerSuspendObserver,
+                           private base::PowerThermalObserver {
  public:
   static v8::Local<v8::Value> Create(v8::Isolate* isolate);
 
@@ -53,11 +52,16 @@ class PowerMonitor : public gin::Wrappable<PowerMonitor>,
 #endif
 
   // base::PowerStateObserver implementations:
-  void OnPowerStateChange(bool on_battery_power) override;
+  void OnBatteryPowerStatusChange(
+      BatteryPowerStatus battery_power_status) override;
 
   // base::PowerSuspendObserver implementations:
   void OnSuspend() override;
   void OnResume() override;
+
+  // base::PowerThermalObserver
+  void OnThermalStateChange(DeviceThermalState new_state) override;
+  void OnSpeedLimitChange(int speed_limit) override;
 
 #if BUILDFLAG(IS_WIN)
   // Static callback invoked when a message comes in to our messaging window.
@@ -86,8 +90,6 @@ class PowerMonitor : public gin::Wrappable<PowerMonitor>,
 #endif
 };
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api
 
 #endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_POWER_MONITOR_H_

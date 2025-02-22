@@ -7,9 +7,8 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/task/post_task.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -26,10 +25,13 @@
  @private
   in_app_purchase::InAppPurchaseCallback callback_;
   NSInteger quantity_;
+  NSString* username_;
+  InAppPurchase __strong* self_;
 }
 
 - (id)initWithCallback:(in_app_purchase::InAppPurchaseCallback)callback
-              quantity:(NSInteger)quantity;
+              quantity:(NSInteger)quantity
+              username:(NSString*)username;
 
 - (void)purchaseProduct:(NSString*)productID;
 
@@ -46,10 +48,13 @@
  * to the queue.
  */
 - (id)initWithCallback:(in_app_purchase::InAppPurchaseCallback)callback
-              quantity:(NSInteger)quantity {
+              quantity:(NSInteger)quantity
+              username:(NSString*)username {
   if ((self = [super init])) {
     callback_ = std::move(callback);
     quantity_ = quantity;
+    username_ = [username copy];
+    self_ = self;
   }
 
   return self;
@@ -74,16 +79,13 @@
 }
 
 /**
- * Process product informations and start the payment.
+ * Process product information and start the payment.
  *
  * @param request - The product request.
- * @param response - The informations about the list of products.
+ * @param response - The information about the list of products.
  */
 - (void)productsRequest:(SKProductsRequest*)request
      didReceiveResponse:(SKProductsResponse*)response {
-  // Release request object.
-  [request release];
-
   // Get the first product.
   NSArray* products = response.products;
   SKProduct* product = [products count] == 1 ? [products firstObject] : nil;
@@ -91,6 +93,7 @@
   // Return if the product is not found or invalid.
   if (product == nil) {
     [self runCallback:false];
+    self_ = nil;
     return;
   }
 
@@ -108,11 +111,13 @@
   // when the transaction is finished).
   SKMutablePayment* payment = [SKMutablePayment paymentWithProduct:product];
   payment.quantity = quantity_;
+  payment.applicationUsername = username_;
 
   [[SKPaymentQueue defaultQueue] addPayment:payment];
 
   // Notify that the payment has been added to the queue with success.
   [self runCallback:true];
+  self_ = nil;
 }
 
 /**
@@ -122,11 +127,9 @@
  */
 - (void)runCallback:(bool)isProductValid {
   if (callback_) {
-    base::PostTask(FROM_HERE, {content::BrowserThread::UI},
-                   base::BindOnce(std::move(callback_), isProductValid));
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback_), isProductValid));
   }
-  // Release this delegate.
-  [self release];
 }
 
 @end
@@ -184,9 +187,12 @@ std::string GetReceiptURL() {
 
 void PurchaseProduct(const std::string& productID,
                      int quantity,
+                     const std::string& username,
                      InAppPurchaseCallback callback) {
-  auto* iap = [[InAppPurchase alloc] initWithCallback:std::move(callback)
-                                             quantity:quantity];
+  auto* iap = [[InAppPurchase alloc]
+      initWithCallback:std::move(callback)
+              quantity:quantity
+              username:base::SysUTF8ToNSString(username)];
 
   [iap purchaseProduct:base::SysUTF8ToNSString(productID)];
 }

@@ -4,7 +4,6 @@
 
 #include "shell/browser/extensions/api/resources_private/resources_private_api.h"
 
-#include <memory>
 #include <string>
 #include <utility>
 
@@ -14,61 +13,22 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/zoom/page_zoom_constants.h"
-#include "pdf/buildflags.h"
-#include "printing/buildflags/buildflags.h"
+#include "electron/buildflags/buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 
-#if BUILDFLAG(ENABLE_PDF)
+#if BUILDFLAG(ENABLE_PDF_VIEWER)
+#include "chrome/browser/pdf/pdf_extension_util.h"
 #include "pdf/pdf_features.h"
-#endif  // BUILDFLAG(ENABLE_PDF)
+#endif  // BUILDFLAG(ENABLE_PDF_VIEWER)
 
 // To add a new component to this API, simply:
 // 1. Add your component to the Component enum in
-//      chrome/common/extensions/api/resources_private.idl
-// 2. Create an AddStringsForMyComponent(base::DictionaryValue * dict) method.
+//      shell/common/extensions/api/resources_private.idl
+// 2. Create an AddStringsForMyComponent(base::Value::Dict* dict) method.
 // 3. Tie in that method to the switch statement in Run()
 
 namespace extensions {
-
-namespace {
-
-void AddStringsForPdf(base::DictionaryValue* dict) {
-#if BUILDFLAG(ENABLE_PDF)
-  static constexpr webui::LocalizedString kPdfResources[] = {
-      {"passwordDialogTitle", IDS_PDF_PASSWORD_DIALOG_TITLE},
-      {"passwordPrompt", IDS_PDF_NEED_PASSWORD},
-      {"passwordSubmit", IDS_PDF_PASSWORD_SUBMIT},
-      {"thumbnailPageAriaLabel", IDS_PDF_THUMBNAIL_PAGE_ARIA_LABEL},
-      {"passwordInvalid", IDS_PDF_PASSWORD_INVALID},
-      {"pageLoading", IDS_PDF_PAGE_LOADING},
-      {"pageLoadFailed", IDS_PDF_PAGE_LOAD_FAILED},
-      {"errorDialogTitle", IDS_PDF_ERROR_DIALOG_TITLE},
-      {"pageReload", IDS_PDF_PAGE_RELOAD_BUTTON},
-      {"bookmarks", IDS_PDF_BOOKMARKS},
-      {"labelPageNumber", IDS_PDF_LABEL_PAGE_NUMBER},
-      {"tooltipDownload", IDS_PDF_TOOLTIP_DOWNLOAD},
-      {"tooltipPrint", IDS_PDF_TOOLTIP_PRINT},
-      {"tooltipFitToPage", IDS_PDF_TOOLTIP_FIT_PAGE},
-      {"tooltipFitToWidth", IDS_PDF_TOOLTIP_FIT_WIDTH},
-      {"tooltipZoomIn", IDS_PDF_TOOLTIP_ZOOM_IN},
-      {"tooltipZoomOut", IDS_PDF_TOOLTIP_ZOOM_OUT},
-  };
-  for (const auto& resource : kPdfResources)
-    dict->SetString(resource.name, l10n_util::GetStringUTF16(resource.id));
-
-  dict->SetString("presetZoomFactors", zoom::GetPresetZoomFactorsAsJSON());
-#endif  // BUILDFLAG(ENABLE_PDF)
-}
-
-void AddAdditionalDataForPdf(base::DictionaryValue* dict) {
-#if BUILDFLAG(ENABLE_PDF)
-  dict->SetKey("pdfAnnotationsEnabled", base::Value(false));
-  dict->SetKey("printingEnabled", base::Value(true));
-#endif  // BUILDFLAG(ENABLE_PDF)
-}
-
-}  // namespace
 
 namespace get_strings = api::resources_private::GetStrings;
 
@@ -79,30 +39,30 @@ ResourcesPrivateGetStringsFunction::~ResourcesPrivateGetStringsFunction() =
     default;
 
 ExtensionFunction::ResponseAction ResourcesPrivateGetStringsFunction::Run() {
-  std::unique_ptr<get_strings::Params> params(
+  std::optional<get_strings::Params> params(
       get_strings::Params::Create(args()));
-  auto dict = std::make_unique<base::DictionaryValue>();
+  base::Value::Dict dict;
 
   api::resources_private::Component component = params->component;
 
   switch (component) {
-    case api::resources_private::COMPONENT_PDF:
-      AddStringsForPdf(dict.get());
-      AddAdditionalDataForPdf(dict.get());
+    case api::resources_private::Component::kPdf:
+#if BUILDFLAG(ENABLE_PDF_VIEWER)
+      pdf_extension_util::AddStrings(
+          pdf_extension_util::PdfViewerContext::kPdfViewer, &dict);
+      pdf_extension_util::AddAdditionalData(true, false, &dict);
+#endif
       break;
-    case api::resources_private::COMPONENT_IDENTITY:
+    case api::resources_private::Component::kIdentity:
       NOTREACHED();
-      break;
-    case api::resources_private::COMPONENT_NONE:
+    case api::resources_private::Component::kNone:
       NOTREACHED();
-      break;
   }
 
   const std::string& app_locale = g_browser_process->GetApplicationLocale();
-  webui::SetLoadTimeDataDefaults(app_locale, dict.get());
+  webui::SetLoadTimeDataDefaults(app_locale, &dict);
 
-  return RespondNow(
-      OneArgument(base::Value::FromUniquePtrValue(std::move(dict))));
+  return RespondNow(WithArguments(std::move(dict)));
 }
 
 }  // namespace extensions

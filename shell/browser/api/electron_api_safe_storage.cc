@@ -2,46 +2,64 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#include "shell/browser/api/electron_api_safe_storage.h"
-
 #include <string>
-#include <vector>
 
-#include "components/os_crypt/os_crypt.h"
+#include "components/os_crypt/sync/os_crypt.h"
 #include "shell/browser/browser.h"
+#include "shell/browser/browser_process_impl.h"
 #include "shell/common/gin_converters/base_converter.h"
 #include "shell/common/gin_converters/callback_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/node_includes.h"
-#include "shell/common/platform_util.h"
 
-namespace electron {
+namespace {
 
-namespace safestorage {
+const char* kEncryptionVersionPrefixV10 = "v10";
+const char* kEncryptionVersionPrefixV11 = "v11";
+bool use_password_v10 = false;
 
-static const char* kEncryptionVersionPrefixV10 = "v10";
-static const char* kEncryptionVersionPrefixV11 = "v11";
+bool IsEncryptionAvailable() {
+#if BUILDFLAG(IS_LINUX)
+  // Calling IsEncryptionAvailable() before the app is ready results in a crash
+  // on Linux.
+  // Refs: https://github.com/electron/electron/issues/32206.
+  if (!electron::Browser::Get()->is_ready())
+    return false;
+  return OSCrypt::IsEncryptionAvailable() ||
+         (use_password_v10 &&
+          static_cast<BrowserProcessImpl*>(g_browser_process)
+                  ->linux_storage_backend() == "basic_text");
+#else
+  return OSCrypt::IsEncryptionAvailable();
+#endif
+}
 
-#if DCHECK_IS_ON()
-static bool electron_crypto_ready = false;
+void SetUsePasswordV10(bool use) {
+  use_password_v10 = use;
+}
 
-void SetElectronCryptoReady(bool ready) {
-  electron_crypto_ready = ready;
+#if BUILDFLAG(IS_LINUX)
+std::string GetSelectedLinuxBackend() {
+  if (!electron::Browser::Get()->is_ready())
+    return "unknown";
+  return static_cast<BrowserProcessImpl*>(g_browser_process)
+      ->linux_storage_backend();
 }
 #endif
 
-bool IsEncryptionAvailable() {
-  return OSCrypt::IsEncryptionAvailable();
-}
-
 v8::Local<v8::Value> EncryptString(v8::Isolate* isolate,
                                    const std::string& plaintext) {
-  if (!OSCrypt::IsEncryptionAvailable()) {
+  if (!IsEncryptionAvailable()) {
+    if (!electron::Browser::Get()->is_ready()) {
+      gin_helper::ErrorThrower(isolate).ThrowError(
+          "safeStorage cannot be used before app is ready");
+      return {};
+    }
     gin_helper::ErrorThrower(isolate).ThrowError(
-        "Error while decrypting the ciphertext provided to "
-        "safeStorage.decryptString. "
+        "Error while encrypting the text provided to "
+        "safeStorage.encryptString. "
         "Encryption is not available.");
-    return v8::Local<v8::Value>();
+    return {};
   }
 
   std::string ciphertext;
@@ -51,7 +69,7 @@ v8::Local<v8::Value> EncryptString(v8::Isolate* isolate,
     gin_helper::ErrorThrower(isolate).ThrowError(
         "Error while encrypting the text provided to "
         "safeStorage.encryptString.");
-    return v8::Local<v8::Value>();
+    return {};
   }
 
   return node::Buffer::Copy(isolate, ciphertext.c_str(), ciphertext.size())
@@ -59,7 +77,12 @@ v8::Local<v8::Value> EncryptString(v8::Isolate* isolate,
 }
 
 std::string DecryptString(v8::Isolate* isolate, v8::Local<v8::Value> buffer) {
-  if (!OSCrypt::IsEncryptionAvailable()) {
+  if (!IsEncryptionAvailable()) {
+    if (!electron::Browser::Get()->is_ready()) {
+      gin_helper::ErrorThrower(isolate).ThrowError(
+          "safeStorage cannot be used before app is ready");
+      return "";
+    }
     gin_helper::ErrorThrower(isolate).ThrowError(
         "Error while decrypting the ciphertext provided to "
         "safeStorage.decryptString. "
@@ -102,9 +125,7 @@ std::string DecryptString(v8::Isolate* isolate, v8::Local<v8::Value> buffer) {
   return plaintext;
 }
 
-}  // namespace safestorage
-
-}  // namespace electron
+}  // namespace
 
 void Initialize(v8::Local<v8::Object> exports,
                 v8::Local<v8::Value> unused,
@@ -112,10 +133,13 @@ void Initialize(v8::Local<v8::Object> exports,
                 void* priv) {
   v8::Isolate* isolate = context->GetIsolate();
   gin_helper::Dictionary dict(isolate, exports);
-  dict.SetMethod("isEncryptionAvailable",
-                 &electron::safestorage::IsEncryptionAvailable);
-  dict.SetMethod("encryptString", &electron::safestorage::EncryptString);
-  dict.SetMethod("decryptString", &electron::safestorage::DecryptString);
+  dict.SetMethod("decryptString", &DecryptString);
+  dict.SetMethod("encryptString", &EncryptString);
+#if BUILDFLAG(IS_LINUX)
+  dict.SetMethod("getSelectedStorageBackend", &GetSelectedLinuxBackend);
+#endif
+  dict.SetMethod("isEncryptionAvailable", &IsEncryptionAvailable);
+  dict.SetMethod("setUsePlainTextEncryption", &SetUsePasswordV10);
 }
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(electron_browser_safe_storage, Initialize)
+NODE_LINKED_BINDING_CONTEXT_AWARE(electron_browser_safe_storage, Initialize)

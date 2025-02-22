@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
-const { version } = require('./package');
+const { downloadArtifact } = require('@electron/get');
+
+const extract = require('extract-zip');
 
 const childProcess = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const extract = require('extract-zip');
-const { downloadArtifact } = require('@electron/get');
+
+const { version } = require('./package');
 
 if (process.env.ELECTRON_SKIP_BINARY_DOWNLOAD) {
   process.exit(0);
@@ -42,7 +44,7 @@ downloadArtifact({
   artifactName: 'electron',
   force: process.env.force_no_cache === 'true',
   cacheRoot: process.env.electron_config_cache,
-  checksums: process.env.electron_use_remote_checksums ? undefined : require('./checksums.json'),
+  checksums: process.env.electron_use_remote_checksums ?? process.env.npm_config_electron_use_remote_checksums ? undefined : require('./checksums.json'),
   platform,
   arch
 }).then(extractFile).catch(err => {
@@ -59,7 +61,7 @@ function isInstalled () {
     if (fs.readFileSync(path.join(__dirname, 'path.txt'), 'utf-8') !== platformPath) {
       return false;
     }
-  } catch (ignored) {
+  } catch {
     return false;
   }
 
@@ -70,16 +72,21 @@ function isInstalled () {
 
 // unzips and makes path.txt point at the correct executable
 function extractFile (zipPath) {
-  return new Promise((resolve, reject) => {
-    extract(zipPath, { dir: path.join(__dirname, 'dist') }, err => {
-      if (err) return reject(err);
+  const distPath = process.env.ELECTRON_OVERRIDE_DIST_PATH || path.join(__dirname, 'dist');
 
-      fs.writeFile(path.join(__dirname, 'path.txt'), platformPath, err => {
-        if (err) return reject(err);
+  return extract(zipPath, { dir: path.join(__dirname, 'dist') }).then(() => {
+    // If the zip contains an "electron.d.ts" file,
+    // move that up
+    const srcTypeDefPath = path.join(distPath, 'electron.d.ts');
+    const targetTypeDefPath = path.join(__dirname, 'electron.d.ts');
+    const hasTypeDefinitions = fs.existsSync(srcTypeDefPath);
 
-        resolve();
-      });
-    });
+    if (hasTypeDefinitions) {
+      fs.renameSync(srcTypeDefPath, targetTypeDefPath);
+    }
+
+    // Write a "path.txt" file.
+    return fs.promises.writeFile(path.join(__dirname, 'path.txt'), platformPath);
   });
 }
 

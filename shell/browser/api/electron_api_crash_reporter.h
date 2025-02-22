@@ -7,13 +7,10 @@
 
 #include <map>
 #include <string>
-#include "base/files/file_path.h"
 
-namespace electron {
+#include "build/build_config.h"
 
-namespace api {
-
-namespace crash_reporter {
+namespace electron::api::crash_reporter {
 
 bool IsCrashReporterEnabled();
 
@@ -32,10 +29,6 @@ void Start(const std::string& submit_url,
            const std::map<std::string, std::string>& extra,
            bool is_node_process);
 
-}  // namespace crash_reporter
-
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api::crash_reporter
 
 #endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_CRASH_REPORTER_H_

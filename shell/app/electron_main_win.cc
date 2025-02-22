@@ -17,12 +17,14 @@
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/environment.h"
+#include "base/debug/alias.h"
 #include "base/i18n/icu_util.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/process/launch.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/win/windows_version.h"
-#include "components/browser_watcher/exit_code_watcher_win.h"
+#include "base/win/dark_mode_support.h"
+#include "chrome/app/exit_code_watcher_win.h"
 #include "components/crash/core/app/crash_switches.h"
 #include "components/crash/core/app/run_as_crashpad_handler_win.h"
 #include "content/public/app/content_main.h"
@@ -44,9 +46,9 @@ namespace {
 const char kUserDataDir[] = "user-data-dir";
 const char kProcessType[] = "type";
 
-[[maybe_unused]] bool IsEnvSet(const char* name) {
-  size_t required_size;
-  getenv_s(&required_size, nullptr, 0, name);
+[[nodiscard]] bool IsEnvSet(const base::cstring_view name) {
+  size_t required_size = 0;
+  getenv_s(&required_size, nullptr, 0, name.c_str());
   return required_size != 0;
 }
 
@@ -125,19 +127,19 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* cmd, int) {
   // If we are already a fiber then continue normal execution.
 #endif  // defined(ARCH_CPU_32_BITS)
 
-  struct Arguments {
+  {
     int argc = 0;
     wchar_t** argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
-
-    ~Arguments() { LocalFree(argv); }
-  } arguments;
-
-  if (!arguments.argv)
-    return -1;
+    if (!argv)
+      return -1;
+    base::CommandLine::Init(0, nullptr);  // args ignored on Windows
+    electron::ElectronCommandLine::Init(argc, argv);
+    LocalFree(argv);
+  }
 
 #ifdef _DEBUG
   // Don't display assert dialog boxes in CI test runs
-  static const char kCI[] = "CI";
+  static constexpr base::cstring_view kCI = "CI";
   if (IsEnvSet(kCI)) {
     _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_DEBUG | _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
@@ -149,31 +151,19 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* cmd, int) {
   }
 #endif
 
-#if BUILDFLAG(ENABLE_RUN_AS_NODE)
   bool run_as_node =
       electron::fuses::IsRunAsNodeEnabled() && IsEnvSet(electron::kRunAsNode);
-#else
-  bool run_as_node = false;
-#endif
 
   // Make sure the output is printed to console.
   if (run_as_node || !IsEnvSet("ELECTRON_NO_ATTACH_CONSOLE"))
     base::RouteStdioToConsole(false);
 
-  std::vector<char*> argv(arguments.argc);
-  std::transform(arguments.argv, arguments.argv + arguments.argc, argv.begin(),
-                 [](auto& a) { return _strdup(base::WideToUTF8(a).c_str()); });
-#if BUILDFLAG(ENABLE_RUN_AS_NODE)
-  if (electron::fuses::IsRunAsNodeEnabled() && run_as_node) {
+  if (run_as_node) {
     base::AtExitManager atexit_manager;
     base::i18n::InitializeICU();
-    auto ret = electron::NodeMain(argv.size(), argv.data());
-    std::for_each(argv.begin(), argv.end(), free);
-    return ret;
+    return electron::NodeMain();
   }
-#endif
 
-  base::CommandLine::Init(argv.size(), argv.data());
   const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
 
@@ -182,7 +172,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* cmd, int) {
 
   if (process_type == crash_reporter::switches::kCrashpadHandler) {
     // Check if we should monitor the exit code of this process
-    std::unique_ptr<browser_watcher::ExitCodeWatcher> exit_code_watcher;
+    std::unique_ptr<ExitCodeWatcher> exit_code_watcher;
 
     // Retrieve the client process from the command line
     crashpad::InitialClientData initial_client_data;
@@ -195,8 +185,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* cmd, int) {
               ::GetCurrentProcess(), &duplicate_handle,
               PROCESS_QUERY_INFORMATION, FALSE, DUPLICATE_SAME_ACCESS)) {
         base::Process parent_process(duplicate_handle);
-        exit_code_watcher =
-            std::make_unique<browser_watcher::ExitCodeWatcher>();
+        exit_code_watcher = std::make_unique<ExitCodeWatcher>();
         if (exit_code_watcher->Initialize(std::move(parent_process))) {
           exit_code_watcher->StartWatching();
         }
@@ -219,12 +208,17 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* cmd, int) {
     return crashpad_status;
   }
 
+#if BUILDFLAG(IS_WIN)
+  // access ui native theme here to prevent blocking calls later
+  base::win::AllowDarkModeForApp(true);
+#endif
+
 #if defined(ARCH_CPU_32_BITS)
   // Intentionally crash if converting to a fiber failed.
   CHECK_EQ(fiber_status, FiberStatus::kSuccess);
 #endif  // defined(ARCH_CPU_32_BITS)
 
-  if (!electron::CheckCommandLineArguments(arguments.argc, arguments.argv))
+  if (!electron::CheckCommandLineArguments(command_line->argv()))
     return -1;
 
   sandbox::SandboxInterfaceInfo sandbox_info = {nullptr};
@@ -234,6 +228,5 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t* cmd, int) {
   content::ContentMainParams params(&delegate);
   params.instance = instance;
   params.sandbox_info = &sandbox_info;
-  electron::ElectronCommandLine::Init(arguments.argc, arguments.argv);
   return content::ContentMain(std::move(params));
 }

@@ -21,7 +21,6 @@ In sandboxed renderers the `process` object contains only a subset of the APIs:
 * `getSystemMemoryInfo()`
 * `getSystemVersion()`
 * `getCPUUsage()`
-* `getIOCounters()`
 * `uptime()`
 * `argv`
 * `execPath`
@@ -49,8 +48,11 @@ beginning to load the web page or the main script.
 
 ### `process.defaultApp` _Readonly_
 
-A `boolean`. When app is started by being passed as parameter to the default app, this
+A `boolean`. When the app is started by being passed as parameter to the default Electron executable, this
 property is `true` in the main process, otherwise it is `undefined`.
+For example when running the app with `electron .`, it is `true`,
+even if the app is packaged ([`isPackaged`](app.md#appispackaged-readonly)) is `true`.
+This can be useful to determine how many arguments will need to be sliced off from `process.argv`.
 
 ### `process.isMainFrame` _Readonly_
 
@@ -112,7 +114,9 @@ A `string` representing the current process's type, can be:
 
 * `browser` - The main process
 * `renderer` - A renderer process
+* `service-worker` - In a service worker
 * `worker` - In a web worker
+* `utility` - In a node process launched as a service
 
 ### `process.versions.chrome` _Readonly_
 
@@ -134,6 +138,11 @@ Each frame has its own JavaScript context. When contextIsolation is enabled, the
 world also has a separate JavaScript context.
 This property is only available in the renderer process.
 
+### `process.parentPort`
+
+A [`Electron.ParentPort`](parent-port.md) property if this is a [`UtilityProcess`](utility-process.md)
+(or `null` otherwise) allowing communication with the parent process.
+
 ## Methods
 
 The `process` object has the following methods:
@@ -152,10 +161,6 @@ The time is represented as number of milliseconds since epoch. It returns null i
 ### `process.getCPUUsage()`
 
 Returns [`CPUUsage`](structures/cpu-usage.md)
-
-### `process.getIOCounters()` _Windows_ _Linux_
-
-Returns [`IOCounters`](structures/io-counters.md)
 
 ### `process.getHeapStatistics()`
 

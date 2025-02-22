@@ -7,8 +7,7 @@
 #include <memory>
 #include <string>
 
-#include "base/lazy_instance.h"
-#include "base/logging.h"
+#include "base/no_destructor.h"
 #include "components/version_info/version_info.h"
 #include "content/public/common/user_agent.h"
 #include "extensions/common/core_extensions_api_provider.h"
@@ -39,34 +38,31 @@ class ElectronPermissionMessageProvider
       const ElectronPermissionMessageProvider&) = delete;
 
   // PermissionMessageProvider implementation.
-  extensions::PermissionMessages GetPermissionMessages(
+  [[nodiscard]] extensions::PermissionMessages GetPermissionMessages(
       const extensions::PermissionIDSet& permissions) const override {
     return extensions::PermissionMessages();
   }
 
-  bool IsPrivilegeIncrease(
+  [[nodiscard]] bool IsPrivilegeIncrease(
       const extensions::PermissionSet& granted_permissions,
       const extensions::PermissionSet& requested_permissions,
       extensions::Manifest::Type extension_type) const override {
     // Ensure we implement this before shipping.
-    CHECK(false);
-    return false;
+    NOTREACHED();
   }
 
-  extensions::PermissionIDSet GetAllPermissionIDs(
+  [[nodiscard]] extensions::PermissionIDSet GetAllPermissionIDs(
       const extensions::PermissionSet& permissions,
       extensions::Manifest::Type extension_type) const override {
-    return extensions::PermissionIDSet();
+    return {};
   }
 };
-
-base::LazyInstance<ElectronPermissionMessageProvider>::DestructorAtExit
-    g_permission_message_provider = LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
 
 ElectronExtensionsClient::ElectronExtensionsClient()
     : webstore_base_url_(extension_urls::kChromeWebstoreBaseURL),
+      new_webstore_base_url_(extension_urls::kNewChromeWebstoreBaseURL),
       webstore_update_url_(extension_urls::kChromeWebstoreUpdateURL) {
   AddAPIProvider(std::make_unique<extensions::CoreExtensionsAPIProvider>());
   AddAPIProvider(std::make_unique<ElectronExtensionsAPIProvider>());
@@ -84,7 +80,9 @@ void ElectronExtensionsClient::InitializeWebStoreUrls(
 const extensions::PermissionMessageProvider&
 ElectronExtensionsClient::GetPermissionMessageProvider() const {
   NOTIMPLEMENTED();
-  return g_permission_message_provider.Get();
+
+  static base::NoDestructor<ElectronPermissionMessageProvider> instance;
+  return *instance;
 }
 
 const std::string ElectronExtensionsClient::GetProductName() {
@@ -114,7 +112,7 @@ extensions::URLPatternSet
 ElectronExtensionsClient::GetPermittedChromeSchemeHosts(
     const extensions::Extension* extension,
     const extensions::APIPermissionSet& api_permissions) const {
-  return extensions::URLPatternSet();
+  return {};
 }
 
 bool ElectronExtensionsClient::IsScriptableURL(const GURL& url,
@@ -125,6 +123,10 @@ bool ElectronExtensionsClient::IsScriptableURL(const GURL& url,
 
 const GURL& ElectronExtensionsClient::GetWebstoreBaseURL() const {
   return webstore_base_url_;
+}
+
+const GURL& ElectronExtensionsClient::GetNewWebstoreBaseURL() const {
+  return new_webstore_base_url_;
 }
 
 const GURL& ElectronExtensionsClient::GetWebstoreUpdateURL() const {

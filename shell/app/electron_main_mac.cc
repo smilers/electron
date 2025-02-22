@@ -5,65 +5,82 @@
 #include <cstdlib>
 #include <memory>
 
-#include "electron/buildflags/buildflags.h"
+#include "base/strings/cstring_view.h"
 #include "electron/fuses.h"
+#include "electron/mas.h"
 #include "shell/app/electron_library_main.h"
 #include "shell/app/uv_stdio_fix.h"
 #include "shell/common/electron_constants.h"
 
-#if defined(HELPER_EXECUTABLE) && !defined(MAS_BUILD)
+#if defined(HELPER_EXECUTABLE) && !IS_MAS_BUILD()
 #include <mach-o/dyld.h>
 #include <cstdio>
 
 #include "sandbox/mac/seatbelt_exec.h"  // nogncheck
 #endif
 
+extern "C" {
+// abort_report_np() records the message in a special section that both the
+// system CrashReporter and Crashpad collect in crash reports. Using a Crashpad
+// Annotation would be preferable, but this executable cannot depend on
+// Crashpad directly.
+void abort_report_np(const char* fmt, ...);
+}
+
 namespace {
 
-[[maybe_unused]] bool IsEnvSet(const char* name) {
-  char* indicator = getenv(name);
-  return indicator && indicator[0] != '\0';
+[[nodiscard]] bool IsEnvSet(const base::cstring_view name) {
+  const char* const indicator = getenv(name.c_str());
+  return indicator && *indicator;
 }
+
+#if defined(HELPER_EXECUTABLE) && !IS_MAS_BUILD()
+[[noreturn]] void FatalError(const char* format, ...) {
+  va_list valist;
+  va_start(valist, format);
+  char message[4096];
+  if (vsnprintf(message, sizeof(message), format, valist) >= 0) {
+    fputs(message, stderr);
+    abort_report_np("%s", message);
+  }
+  va_end(valist);
+  abort();
+}
+#endif
 
 }  // namespace
 
 int main(int argc, char* argv[]) {
   FixStdioStreams();
 
-#if BUILDFLAG(ENABLE_RUN_AS_NODE)
   if (electron::fuses::IsRunAsNodeEnabled() && IsEnvSet(electron::kRunAsNode)) {
     return ElectronInitializeICUandStartNode(argc, argv);
   }
-#endif
 
-#if defined(HELPER_EXECUTABLE) && !defined(MAS_BUILD)
+#if defined(HELPER_EXECUTABLE) && !IS_MAS_BUILD()
   uint32_t exec_path_size = 0;
-  int rv = _NSGetExecutablePath(NULL, &exec_path_size);
+  int rv = _NSGetExecutablePath(nullptr, &exec_path_size);
   if (rv != -1) {
-    fprintf(stderr, "_NSGetExecutablePath: get length failed\n");
-    abort();
+    FatalError("_NSGetExecutablePath: get length failed.");
   }
 
   auto exec_path = std::make_unique<char[]>(exec_path_size);
   rv = _NSGetExecutablePath(exec_path.get(), &exec_path_size);
   if (rv != 0) {
-    fprintf(stderr, "_NSGetExecutablePath: get path failed\n");
-    abort();
+    FatalError("_NSGetExecutablePath: get path failed.");
   }
   sandbox::SeatbeltExecServer::CreateFromArgumentsResult seatbelt =
       sandbox::SeatbeltExecServer::CreateFromArguments(exec_path.get(), argc,
                                                        argv);
   if (seatbelt.sandbox_required) {
     if (!seatbelt.server) {
-      fprintf(stderr, "Failed to create seatbelt sandbox server.\n");
-      abort();
+      FatalError("Failed to create seatbelt sandbox server.");
     }
     if (!seatbelt.server->InitializeSandbox()) {
-      fprintf(stderr, "Failed to initialize sandbox.\n");
-      abort();
+      FatalError("Failed to initialize sandbox.");
     }
   }
-#endif  // defined(HELPER_EXECUTABLE) && !defined(MAS_BUILD)
+#endif  // defined(HELPER_EXECUTABLE) && !IS_MAS_BUILD
 
   return ElectronMain(argc, argv);
 }

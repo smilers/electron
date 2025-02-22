@@ -5,8 +5,7 @@
 #ifndef ELECTRON_SHELL_BROWSER_MAC_ELECTRON_APPLICATION_H_
 #define ELECTRON_SHELL_BROWSER_MAC_ELECTRON_APPLICATION_H_
 
-#include "base/callback.h"
-#include "base/mac/scoped_nsobject.h"
+#include "base/functional/callback.h"
 #include "base/mac/scoped_sending_event.h"
 
 #import <AVFoundation/AVFoundation.h>
@@ -17,7 +16,7 @@
                                             NSUserActivityDelegate> {
  @private
   BOOL handlingSendEvent_;
-  base::scoped_nsobject<NSUserActivity> currentActivity_;
+  NSUserActivity* __strong currentActivity_;
   NSCondition* handoffLock_;
   BOOL updateReceived_;
   BOOL userStoppedShutdown_;

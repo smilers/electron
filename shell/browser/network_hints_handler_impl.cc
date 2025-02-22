@@ -12,20 +12,19 @@
 #include "content/public/browser/render_process_host.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "shell/browser/api/electron_api_session.h"
-#include "shell/browser/electron_browser_context.h"
 #include "shell/common/gin_converters/gurl_converter.h"
 #include "v8/include/v8.h"
 
 NetworkHintsHandlerImpl::NetworkHintsHandlerImpl(
     content::RenderFrameHost* frame_host)
     : network_hints::SimpleNetworkHintsHandlerImpl(
-          frame_host->GetProcess()->GetID(),
+          frame_host->GetProcess()->GetDeprecatedID(),
           frame_host->GetRoutingID()),
       browser_context_(frame_host->GetProcess()->GetBrowserContext()) {}
 
 NetworkHintsHandlerImpl::~NetworkHintsHandlerImpl() = default;
 
-void NetworkHintsHandlerImpl::Preconnect(const GURL& url,
+void NetworkHintsHandlerImpl::Preconnect(const url::SchemeHostPort& url,
                                          bool allow_credentials) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
@@ -34,7 +33,7 @@ void NetworkHintsHandlerImpl::Preconnect(const GURL& url,
   }
   auto* session = electron::api::Session::FromBrowserContext(browser_context_);
   if (session) {
-    session->Emit("preconnect", url, allow_credentials);
+    session->Emit("preconnect", url.GetURL(), allow_credentials);
   }
 }
 

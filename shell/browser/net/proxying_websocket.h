@@ -5,10 +5,12 @@
 #ifndef ELECTRON_SHELL_BROWSER_NET_PROXYING_WEBSOCKET_H_
 #define ELECTRON_SHELL_BROWSER_NET_PROXYING_WEBSOCKET_H_
 
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/content_browser_client.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -18,7 +20,6 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/websocket.mojom.h"
 #include "shell/browser/net/web_request_api_interface.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -74,7 +75,7 @@ class ProxyingWebSocket : public network::mojom::WebSocketHandshakeClient,
       network::mojom::WebSocketHandshakeRequestPtr request) override;
   void OnFailure(const std::string& message,
                  int32_t net_error,
-                 int32_t response_code) override;
+                 int32_t response_code) override {}
   void OnConnectionEstablished(
       mojo::PendingRemote<network::mojom::WebSocket> websocket,
       mojo::PendingReceiver<network::mojom::WebSocketClient> client_receiver,
@@ -100,7 +101,7 @@ class ProxyingWebSocket : public network::mojom::WebSocketHandshakeClient,
       WebSocketFactory factory,
       const GURL& url,
       const net::SiteForCookies& site_for_cookies,
-      const absl::optional<std::string>& user_agent,
+      const std::optional<std::string>& user_agent,
       mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
           handshake_client,
       bool has_extra_headers,
@@ -137,7 +138,7 @@ class ProxyingWebSocket : public network::mojom::WebSocketHandshakeClient,
   void OnMojoConnectionError();
 
   // Passed from api::WebRequest.
-  WebRequestAPI* web_request_api_;
+  raw_ptr<WebRequestAPI> web_request_api_;
 
   // Saved to feed the api::WebRequest.
   network::ResourceRequest request_;

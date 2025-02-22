@@ -16,6 +16,15 @@
 #include "media/base/media_switches.h"
 #include "net/base/features.h"
 #include "services/network/public/cpp/features.h"
+#include "third_party/blink/public/common/features.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "device/base/features.h"  // nogncheck
+#endif
+
+#if BUILDFLAG(ENABLE_PDF_VIEWER)
+#include "pdf/pdf_features.h"
+#endif
 
 namespace electron {
 
@@ -32,17 +41,31 @@ void InitializeFeatureList() {
   disable_features +=
       std::string(",") + features::kSpareRendererForSitePerProcess.name;
 
-#if !BUILDFLAG(ENABLE_PICTURE_IN_PICTURE)
-  disable_features += std::string(",") + media::kPictureInPicture.name;
+#if BUILDFLAG(IS_WIN)
+  disable_features +=
+      // Delayed spellcheck initialization is causing the
+      // 'custom dictionary word list API' spec to crash.
+      std::string(",") + spellcheck::kWinDelaySpellcheckServiceInit.name;
 #endif
 
-#if BUILDFLAG(IS_WIN)
-  // Disable async spellchecker suggestions for Windows, which causes
-  // an empty suggestions list to be returned
-  disable_features +=
-      std::string(",") + spellcheck::kWinRetrieveSuggestionsOnlyOnDemand.name;
+#if BUILDFLAG(ENABLE_PDF_VIEWER)
+  // Enable window.showSaveFilePicker api for saving pdf files.
+  // Refs https://issues.chromium.org/issues/373852607
+  enable_features +=
+      std::string(",") + chrome_pdf::features::kPdfUseShowSaveFilePicker.name;
 #endif
-  base::FeatureList::InitializeInstance(enable_features, disable_features);
+
+  std::string platform_specific_enable_features =
+      EnablePlatformSpecificFeatures();
+  if (platform_specific_enable_features.size() > 0) {
+    enable_features += std::string(",") + platform_specific_enable_features;
+  }
+  std::string platform_specific_disable_features =
+      DisablePlatformSpecificFeatures();
+  if (platform_specific_disable_features.size() > 0) {
+    disable_features += std::string(",") + platform_specific_disable_features;
+  }
+  base::FeatureList::InitInstance(enable_features, disable_features);
 }
 
 void InitializeFieldTrials() {
@@ -52,5 +75,14 @@ void InitializeFieldTrials() {
 
   base::FieldTrialList::CreateTrialsFromString(force_fieldtrials);
 }
+
+#if !BUILDFLAG(IS_MAC)
+std::string EnablePlatformSpecificFeatures() {
+  return "";
+}
+std::string DisablePlatformSpecificFeatures() {
+  return "";
+}
+#endif
 
 }  // namespace electron

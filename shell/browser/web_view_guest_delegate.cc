@@ -31,8 +31,9 @@ void WebViewGuestDelegate::AttachToIframe(
     int embedder_frame_id) {
   embedder_web_contents_ = embedder_web_contents;
 
-  int embedder_process_id =
-      embedder_web_contents_->GetMainFrame()->GetProcess()->GetID();
+  int embedder_process_id = embedder_web_contents_->GetPrimaryMainFrame()
+                                ->GetProcess()
+                                ->GetDeprecatedID();
   auto* embedder_frame =
       content::RenderFrameHost::FromID(embedder_process_id, embedder_frame_id);
   DCHECK_EQ(embedder_web_contents_,
@@ -40,16 +41,13 @@ void WebViewGuestDelegate::AttachToIframe(
 
   content::WebContents* guest_web_contents = api_web_contents_->web_contents();
 
-  // Force a refresh of the webPreferences so that OverrideWebkitPrefs runs on
-  // the new web contents before the renderer process initializes.
-  // guest_web_contents->NotifyPreferencesChanged();
-
   // Attach this inner WebContents |guest_web_contents| to the outer
   // WebContents |embedder_web_contents|. The outer WebContents's
   // frame |embedder_frame| hosts the inner WebContents.
   embedder_web_contents_->AttachInnerWebContents(
       base::WrapUnique<content::WebContents>(guest_web_contents),
-      embedder_frame, false);
+      embedder_frame,
+      /*is_full_page=*/false);
 
   ResetZoomController();
 
@@ -70,23 +68,26 @@ content::WebContents* WebViewGuestDelegate::GetOwnerWebContents() {
   return embedder_web_contents_;
 }
 
-void WebViewGuestDelegate::OnZoomLevelChanged(
-    content::WebContents* web_contents,
-    double level,
-    bool is_temporary) {
-  if (web_contents == GetOwnerWebContents()) {
-    if (is_temporary) {
-      api_web_contents_->GetZoomController()->SetTemporaryZoomLevel(level);
+void WebViewGuestDelegate::OnZoomChanged(
+    const WebContentsZoomController::ZoomChangedEventData& data) {
+  if (data.web_contents == GetOwnerWebContents()) {
+    auto* zoom_controller = api_web_contents_->GetZoomController();
+    if (data.temporary) {
+      zoom_controller->SetTemporaryZoomLevel(data.new_zoom_level);
     } else {
-      api_web_contents_->GetZoomController()->SetZoomLevel(level);
+      if (blink::ZoomValuesEqual(data.new_zoom_level,
+                                 zoom_controller->GetZoomLevel()))
+        return;
+      zoom_controller->SetZoomLevel(data.new_zoom_level);
     }
     // Change the default zoom factor to match the embedders' new zoom level.
-    double zoom_factor = blink::PageZoomLevelToZoomFactor(level);
-    api_web_contents_->GetZoomController()->SetDefaultZoomFactor(zoom_factor);
+    double zoom_factor = blink::ZoomLevelToZoomFactor(data.new_zoom_level);
+    zoom_controller->SetDefaultZoomFactor(zoom_factor);
   }
 }
 
-void WebViewGuestDelegate::OnZoomControllerWebContentsDestroyed() {
+void WebViewGuestDelegate::OnZoomControllerDestroyed(
+    WebContentsZoomController* zoom_controller) {
   ResetZoomController();
 }
 
@@ -97,7 +98,8 @@ void WebViewGuestDelegate::ResetZoomController() {
   }
 }
 
-content::WebContents* WebViewGuestDelegate::CreateNewGuestWindow(
+std::unique_ptr<content::WebContents>
+WebViewGuestDelegate::CreateNewGuestWindow(
     const content::WebContents::CreateParams& create_params) {
   // Code below mirrors what content::WebContentsImpl::CreateNewWindow
   // does for non-guest sources
@@ -114,9 +116,15 @@ content::WebContents* WebViewGuestDelegate::CreateNewGuestWindow(
             guest_contents_impl->GetRenderViewHost()->GetWidget());
     if (!create_params.initially_hidden)
       widget_view->Show();
-    return guest_contents_impl;
+    return base::WrapUnique(
+        static_cast<content::WebContentsImpl*>(guest_contents_impl));
   }
-  return guest_contents.release();
+  return guest_contents;
+}
+
+base::WeakPtr<content::BrowserPluginGuestDelegate>
+WebViewGuestDelegate::GetGuestDelegateWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 }  // namespace electron

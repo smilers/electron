@@ -1,27 +1,16 @@
-const { createAppAuth } = require('@octokit/auth-app');
-const cp = require('child_process');
+const { appCredentialsFromString, getTokenForRepo } = require('@electron/github-app-auth');
 
-if (!process.env.CIRCLE_BRANCH) {
-  console.error('Not building for a specific branch, can\'t autopush a patch');
-  process.exit(1);
-}
-
-if (process.env.CIRCLE_PR_NUMBER) {
-  console.error('Building for a forked PR, can\'t autopush a patch');
-  process.exit(1);
-}
-
-const auth = createAppAuth({
-  appId: process.env.PATCH_UP_APP_ID,
-  privateKey: Buffer.from(process.env.PATCH_UP_PRIVATE_KEY, 'base64').toString('utf8'),
-  installationId: process.env.PATCH_UP_INSTALLATION_ID,
-  clientId: process.env.PATCH_UP_CLIENT_ID,
-  clientSecret: process.env.PATCH_UP_CLIENT_SECRET
-});
+const cp = require('node:child_process');
 
 async function main () {
-  const installationAuth = await auth({ type: 'installation' });
-  const remoteURL = `https://x-access-token:${installationAuth.token}@github.com/electron/electron.git`;
+  const token = await getTokenForRepo(
+    {
+      name: 'electron',
+      owner: 'electron'
+    },
+    appCredentialsFromString(process.env.PATCH_UP_APP_CREDS)
+  );
+  const remoteURL = `https://x-access-token:${token}@github.com/electron/electron.git`;
   // NEVER LOG THE OUTPUT OF THIS COMMAND
   // GIT LEAKS THE ACCESS CREDENTIALS IN CONSOLE LOGS
   const { status } = cp.spawnSync('git', ['push', '--set-upstream', remoteURL], {
@@ -33,7 +22,7 @@ async function main () {
   }
 }
 
-if (process.mainModule === module) {
+if (require.main === module) {
   main().catch((err) => {
     console.error(err);
     process.exit(1);

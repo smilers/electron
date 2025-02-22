@@ -17,9 +17,7 @@
 #include "ui/gfx/icon_util.h"
 #include "ui/gfx/image/image_skia.h"
 
-namespace electron {
-
-namespace api {
+namespace electron::api {
 
 // static
 v8::Local<v8::Promise> NativeImage::CreateThumbnailFromPath(
@@ -45,7 +43,7 @@ v8::Local<v8::Promise> NativeImage::CreateThumbnailFromPath(
 
   if (FAILED(hr)) {
     promise.RejectWithErrorMessage(
-        "failed to create IShellItem from the given path");
+        "Failed to create IShellItem from the given path");
     return handle;
   }
 
@@ -55,36 +53,35 @@ v8::Local<v8::Promise> NativeImage::CreateThumbnailFromPath(
                         IID_PPV_ARGS(&pThumbnailCache));
   if (FAILED(hr)) {
     promise.RejectWithErrorMessage(
-        "failed to acquire local thumbnail cache reference");
+        "Failed to acquire local thumbnail cache reference");
     return handle;
   }
 
   // Populate the IShellBitmap
   Microsoft::WRL::ComPtr<ISharedBitmap> pThumbnail;
-  WTS_CACHEFLAGS flags;
-  WTS_THUMBNAILID thumbId;
-  hr = pThumbnailCache->GetThumbnail(pItem.Get(), size.width(),
-                                     WTS_FLAGS::WTS_NONE, &pThumbnail, &flags,
-                                     &thumbId);
+  hr = pThumbnailCache->GetThumbnail(
+      pItem.Get(), size.width(),
+      WTS_FLAGS::WTS_SCALETOREQUESTEDSIZE | WTS_FLAGS::WTS_SCALEUP, &pThumbnail,
+      nullptr, nullptr);
 
   if (FAILED(hr)) {
     promise.RejectWithErrorMessage(
-        "failed to get thumbnail from local thumbnail cache reference");
+        "Failed to get thumbnail from local thumbnail cache reference");
     return handle;
   }
 
   // Init HBITMAP
-  HBITMAP hBitmap = NULL;
+  HBITMAP hBitmap = nullptr;
   hr = pThumbnail->GetSharedBitmap(&hBitmap);
   if (FAILED(hr)) {
-    promise.RejectWithErrorMessage("failed to extract bitmap from thumbnail");
+    promise.RejectWithErrorMessage("Failed to extract bitmap from thumbnail");
     return handle;
   }
 
   // convert HBITMAP to gfx::Image
   BITMAP bitmap;
   if (!GetObject(hBitmap, sizeof(bitmap), &bitmap)) {
-    promise.RejectWithErrorMessage("could not convert HBITMAP to BITMAP");
+    promise.RejectWithErrorMessage("Could not convert HBITMAP to BITMAP");
     return handle;
   }
 
@@ -93,7 +90,7 @@ v8::Local<v8::Promise> NativeImage::CreateThumbnailFromPath(
   icon_info.hbmMask = hBitmap;
   icon_info.hbmColor = hBitmap;
 
-  base::win::ScopedHICON icon(CreateIconIndirect(&icon_info));
+  base::win::ScopedGDIObject<HICON> icon(CreateIconIndirect(&icon_info));
   SkBitmap skbitmap = IconUtil::CreateSkBitmapFromHICON(icon.get());
   gfx::ImageSkia image_skia =
       gfx::ImageSkia::CreateFromBitmap(skbitmap, 1.0 /*scale factor*/);
@@ -102,6 +99,4 @@ v8::Local<v8::Promise> NativeImage::CreateThumbnailFromPath(
   return handle;
 }
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api

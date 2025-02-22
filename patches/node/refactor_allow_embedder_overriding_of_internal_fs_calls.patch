@@ -7,61 +7,17 @@ We use this to allow node's 'fs' module to read from ASAR files as if they were
 a real filesystem.
 
 diff --git a/lib/internal/bootstrap/node.js b/lib/internal/bootstrap/node.js
-index 1393cc20f45db69c9e133e25ac9428fcb6d81100..085dd7e09d31fb1800b3596cc068637e1956ba52 100644
+index f5c0208864084a234a05898e793845681b6e80cc..48d809f61eaf09097acb3e996e956e39cf7b4ef3 100644
 --- a/lib/internal/bootstrap/node.js
 +++ b/lib/internal/bootstrap/node.js
-@@ -66,6 +66,10 @@ setupBuffer();
- process.domain = null;
+@@ -134,6 +134,10 @@ process.domain = null;
+ }
  process._exiting = false;
  
 +// NOTE: Electron deletes this references before user code runs so that
-+// internalBinding is not leaked to user code
++// internalBinding is not leaked to user code.
 +process.internalBinding = internalBinding;
 +
  // process.config is serialized config.gypi
- const nativeModule = internalBinding('native_module');
+ const binding = internalBinding('builtins');
  
-diff --git a/lib/internal/modules/cjs/loader.js b/lib/internal/modules/cjs/loader.js
-index 2c188ae0b5cb86493a7fd701c343b36370369f20..caca939942cb721a3efde7005b0a987a19237a8b 100644
---- a/lib/internal/modules/cjs/loader.js
-+++ b/lib/internal/modules/cjs/loader.js
-@@ -86,7 +86,7 @@ const fs = require('fs');
- const internalFS = require('internal/fs/utils');
- const path = require('path');
- const { sep } = path;
--const { internalModuleStat } = internalBinding('fs');
-+const internalFsBinding = internalBinding('fs');
- const packageJsonReader = require('internal/modules/package_json_reader');
- const { safeGetenv } = internalBinding('credentials');
- const {
-@@ -161,7 +161,7 @@ function stat(filename) {
-     const result = statCache.get(filename);
-     if (result !== undefined) return result;
-   }
--  const result = internalModuleStat(filename);
-+  const result = internalFsBinding.internalModuleStat(filename);
-   if (statCache !== null && result >= 0) {
-     // Only set cache when `internalModuleStat(filename)` succeeds.
-     statCache.set(filename, result);
-diff --git a/lib/internal/modules/package_json_reader.js b/lib/internal/modules/package_json_reader.js
-index 09eb12bd1533bfed44d9cb62c068e2c880df8ba2..11a6e4b2edc0930049d7acecf2a6e94e51abeb1c 100644
---- a/lib/internal/modules/package_json_reader.js
-+++ b/lib/internal/modules/package_json_reader.js
-@@ -1,7 +1,7 @@
- 'use strict';
- 
- const { SafeMap } = primordials;
--const { internalModuleReadJSON } = internalBinding('fs');
-+const internalFsBinding = internalBinding('fs');
- const { pathToFileURL } = require('url');
- const { toNamespacedPath } = require('path');
- 
-@@ -18,7 +18,7 @@ function read(jsonPath) {
-     return cache.get(jsonPath);
-   }
- 
--  const { 0: string, 1: containsKeys } = internalModuleReadJSON(
-+  const { 0: string, 1: containsKeys } = internalFsBinding.internalModuleReadJSON(
-     toNamespacedPath(jsonPath)
-   );
-   const result = { string, containsKeys };

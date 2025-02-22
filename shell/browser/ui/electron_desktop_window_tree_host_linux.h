@@ -9,21 +9,23 @@
 #ifndef ELECTRON_SHELL_BROWSER_UI_ELECTRON_DESKTOP_WINDOW_TREE_HOST_LINUX_H_
 #define ELECTRON_SHELL_BROWSER_UI_ELECTRON_DESKTOP_WINDOW_TREE_HOST_LINUX_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "shell/browser/native_window_views.h"
-#include "shell/browser/ui/views/client_frame_view_linux.h"
-#include "third_party/skia/include/core/SkRRect.h"
+#include "ui/linux/device_scale_factor_observer.h"
+#include "ui/linux/linux_ui.h"
 #include "ui/native_theme/native_theme_observer.h"
 #include "ui/platform_window/platform_window.h"
-#include "ui/views/linux_ui/device_scale_factor_observer.h"
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host_linux.h"
 
 namespace electron {
 
+class ClientFrameViewLinux;
+class NativeWindowViews;
+
 class ElectronDesktopWindowTreeHostLinux
     : public views::DesktopWindowTreeHostLinux,
-      public ui::NativeThemeObserver,
-      public views::DeviceScaleFactorObserver {
+      private ui::NativeThemeObserver,
+      private ui::DeviceScaleFactorObserver {
  public:
   ElectronDesktopWindowTreeHostLinux(
       NativeWindowViews* native_window_view,
@@ -43,9 +45,12 @@ class ElectronDesktopWindowTreeHostLinux
   void OnWidgetInitDone() override;
 
   // ui::PlatformWindowDelegate
+  gfx::Insets CalculateInsetsInDIP(
+      ui::PlatformWindowState window_state) const override;
   void OnBoundsChanged(const BoundsChange& change) override;
   void OnWindowStateChanged(ui::PlatformWindowState old_state,
                             ui::PlatformWindowState new_state) override;
+  void OnWindowTiledStateChanged(ui::WindowTiledEdges new_tiled_edges) override;
 
   // ui::NativeThemeObserver:
   void OnNativeThemeUpdated(ui::NativeTheme* observed_theme) override;
@@ -53,19 +58,17 @@ class ElectronDesktopWindowTreeHostLinux
   // views::OnDeviceScaleFactorChanged:
   void OnDeviceScaleFactorChanged() override;
 
+  // views::DesktopWindowTreeHostLinux:
+  void UpdateFrameHints() override;
+
  private:
-  void UpdateFrameHints();
-  void UpdateClientDecorationHints(ClientFrameViewLinux* view);
   void UpdateWindowState(ui::PlatformWindowState new_state);
 
-  NativeWindowViews* native_window_view_;  // weak ref
+  raw_ptr<NativeWindowViews> native_window_view_;  // weak ref
 
   base::ScopedObservation<ui::NativeTheme, ui::NativeThemeObserver>
       theme_observation_{this};
-  base::ScopedObservation<views::LinuxUI,
-                          views::DeviceScaleFactorObserver,
-                          &views::LinuxUI::AddDeviceScaleFactorObserver,
-                          &views::LinuxUI::RemoveDeviceScaleFactorObserver>
+  base::ScopedObservation<ui::LinuxUi, ui::DeviceScaleFactorObserver>
       scale_observation_{this};
   ui::PlatformWindowState window_state_ = ui::PlatformWindowState::kUnknown;
 };

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from __future__ import print_function
+
 import argparse
 import glob
 import os
@@ -26,8 +26,10 @@ def main():
   try:
     with scoped_cwd(app_path):
       if args.snapshot_files_dir is None:
-        with open(os.path.join(app_path, 'mksnapshot_args')) as f:
-          mkargs = f.read().splitlines()
+        snapshot_filename = os.path.join(app_path, 'mksnapshot_args')
+        with open(snapshot_filename, encoding='utf-8') as file_in:
+          mkargs = file_in.read().splitlines()
+        print('running: ' + ' '.join(mkargs + [ SNAPSHOT_SOURCE ]))
         subprocess.check_call(mkargs + [ SNAPSHOT_SOURCE ], cwd=app_path)
         print('ok mksnapshot successfully created snapshot_blob.bin.')
         context_snapshot = 'v8_context_snapshot.bin'
@@ -40,7 +42,8 @@ def main():
         gen_binary = get_binary_path('v8_context_snapshot_generator', \
                                     app_path)
         genargs = [ gen_binary, \
-                  '--output_file={0}'.format(context_snapshot_path) ]
+                  f'--output_file={context_snapshot_path}' ]
+        print('running: ' + ' '.join(genargs))
         subprocess.check_call(genargs)
         print('ok v8_context_snapshot_generator successfully created ' \
               + context_snapshot)
@@ -57,18 +60,19 @@ def main():
 
       if sys.platform == 'darwin':
         bin_files = glob.glob(os.path.join(app_path, '*.bin'))
-        app_dir = os.path.join(app_path, '{0}.app'.format(PRODUCT_NAME))
+        app_dir = os.path.join(app_path, f'{PRODUCT_NAME}.app')
         electron = os.path.join(app_dir, 'Contents', 'MacOS', PRODUCT_NAME)
         bin_out_path = os.path.join(app_dir, 'Contents', 'Frameworks',
-                  '{0} Framework.framework'.format(PROJECT_NAME),
+                  f'{PROJECT_NAME} Framework.framework',
                   'Resources')
         for bin_file in bin_files:
           shutil.copy2(bin_file, bin_out_path)
       elif sys.platform == 'win32':
-        electron = os.path.join(app_path, '{0}.exe'.format(PROJECT_NAME))
+        electron = os.path.join(app_path, f'{PROJECT_NAME}.exe')
       else:
         electron = os.path.join(app_path, PROJECT_NAME)
 
+      print('running: ' + ' '.join([electron, test_path]))
       subprocess.check_call([electron, test_path])
       print('ok successfully used custom snapshot.')
   except subprocess.CalledProcessError as e:
@@ -78,7 +82,7 @@ def main():
   except KeyboardInterrupt:
     print('Other error')
     returncode = 0
-  print('Returning with error code: {0}'.format(returncode))
+  print(f'Returning with error code: {returncode}')
   return returncode
 
 
@@ -95,7 +99,7 @@ def create_app_copy(initial_app_path):
 
 def get_binary_path(binary_name, root_path):
   if sys.platform == 'win32':
-    binary_path = os.path.join(root_path, '{0}.exe'.format(binary_name))
+    binary_path = os.path.join(root_path, f'{binary_name}.exe')
   else:
     binary_path = os.path.join(root_path, binary_name)
   return binary_path

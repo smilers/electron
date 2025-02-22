@@ -6,6 +6,8 @@
 
 #include <windows.h>  // windows.h must be included first
 
+#include "base/win/shlwapi.h"  // NOLINT(build/include_order)
+
 #include <atlbase.h>
 #include <comdef.h>
 #include <commdlg.h>
@@ -15,24 +17,20 @@
 #include <shlobj.h>
 #include <wrl/client.h>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/stl_util.h"
-#include "base/strings/string_util.h"
+#include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/scoped_com_initializer.h"
-#include "base/win/windows_version.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "net/base/escape.h"
 #include "shell/common/electron_paths.h"
 #include "ui/base/win/shell.h"
 #include "url/gurl.h"
@@ -48,11 +46,12 @@ class DeleteFileProgressSink : public IFileOperationProgressSink {
   virtual ~DeleteFileProgressSink() = default;
 
  private:
-  ULONG STDMETHODCALLTYPE AddRef(void) override;
-  ULONG STDMETHODCALLTYPE Release(void) override;
+  // IFileOperationProgressSink
+  ULONG STDMETHODCALLTYPE AddRef() override;
+  ULONG STDMETHODCALLTYPE Release() override;
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
                                            LPVOID* ppvObj) override;
-  HRESULT STDMETHODCALLTYPE StartOperations(void) override;
+  HRESULT STDMETHODCALLTYPE StartOperations() override;
   HRESULT STDMETHODCALLTYPE FinishOperations(HRESULT) override;
   HRESULT STDMETHODCALLTYPE PreRenameItem(DWORD, IShellItem*, LPCWSTR) override;
   HRESULT STDMETHODCALLTYPE
@@ -91,9 +90,9 @@ class DeleteFileProgressSink : public IFileOperationProgressSink {
                                         HRESULT,
                                         IShellItem*) override;
   HRESULT STDMETHODCALLTYPE UpdateProgress(UINT, UINT) override;
-  HRESULT STDMETHODCALLTYPE ResetTimer(void) override;
-  HRESULT STDMETHODCALLTYPE PauseTimer(void) override;
-  HRESULT STDMETHODCALLTYPE ResumeTimer(void) override;
+  HRESULT STDMETHODCALLTYPE ResetTimer() override;
+  HRESULT STDMETHODCALLTYPE PauseTimer() override;
+  HRESULT STDMETHODCALLTYPE ResumeTimer() override;
 
   ULONG m_cRef;
 };
@@ -116,7 +115,7 @@ HRESULT DeleteFileProgressSink::PreDeleteItem(DWORD dwFlags, IShellItem*) {
 }
 
 HRESULT DeleteFileProgressSink::QueryInterface(REFIID riid, LPVOID* ppvObj) {
-  // Always set out parameter to NULL, validating it first.
+  // Always set out parameter to nullptr, validating it first.
   if (!ppvObj)
     return E_INVALIDARG;
   *ppvObj = nullptr;
@@ -243,14 +242,23 @@ std::string OpenExternalOnWorkerThread(
   // parameters unexpected by the external program. This url should already
   // have been escaped.
   std::wstring escaped_url =
-      L"\"" + base::UTF8ToWide(net::EscapeExternalHandlerValue(url.spec())) +
+      L"\"" + base::UTF8ToWide(base::EscapeExternalHandlerValue(url.spec())) +
       L"\"";
   std::wstring working_dir = options.working_dir.value();
 
-  if (reinterpret_cast<ULONG_PTR>(
-          ShellExecuteW(nullptr, L"open", escaped_url.c_str(), nullptr,
-                        working_dir.empty() ? nullptr : working_dir.c_str(),
-                        SW_SHOWNORMAL)) <= 32) {
+  SHELLEXECUTEINFO info = {};
+  info.cbSize = sizeof(SHELLEXECUTEINFO);
+  info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+  info.lpVerb = L"open";
+  info.lpFile = escaped_url.c_str();
+  info.lpDirectory = working_dir.empty() ? nullptr : working_dir.c_str();
+  info.nShow = SW_SHOWNORMAL;
+
+  if (options.log_usage) {
+    info.fMask |= SEE_MASK_FLAG_LOG_USAGE;
+  }
+
+  if (!ShellExecuteEx(&info)) {
     return "Failed to open: " +
            logging::SystemErrorCodeToString(logging::GetLastSystemErrorCode());
   }
@@ -270,33 +278,33 @@ void ShowItemInFolderOnWorkerThread(const base::FilePath& full_path) {
     return;
 
   Microsoft::WRL::ComPtr<IShellFolder> desktop;
-  HRESULT hr = SHGetDesktopFolder(desktop.GetAddressOf());
+  HRESULT hr = SHGetDesktopFolder(&desktop);
   if (FAILED(hr))
     return;
 
   base::win::ScopedCoMem<ITEMIDLIST> dir_item;
-  hr = desktop->ParseDisplayName(NULL, NULL,
+  hr = desktop->ParseDisplayName(nullptr, nullptr,
                                  const_cast<wchar_t*>(dir.value().c_str()),
-                                 NULL, &dir_item, NULL);
+                                 nullptr, &dir_item, nullptr);
   if (FAILED(hr))
     return;
 
   base::win::ScopedCoMem<ITEMIDLIST> file_item;
   hr = desktop->ParseDisplayName(
-      NULL, NULL, const_cast<wchar_t*>(full_path.value().c_str()), NULL,
-      &file_item, NULL);
+      nullptr, nullptr, const_cast<wchar_t*>(full_path.value().c_str()),
+      nullptr, &file_item, nullptr);
   if (FAILED(hr))
     return;
 
   const ITEMIDLIST* highlight[] = {file_item};
-  hr = SHOpenFolderAndSelectItems(dir_item, std::size(highlight), highlight,
-                                  NULL);
+  hr = SHOpenFolderAndSelectItems(dir_item, std::size(highlight), highlight, 0);
   if (FAILED(hr)) {
     // On some systems, the above call mysteriously fails with "file not
     // found" even though the file is there.  In these cases, ShellExecute()
     // seems to work as a fallback (although it won't select the file).
     if (hr == ERROR_FILE_NOT_FOUND) {
-      ShellExecute(NULL, L"open", dir.value().c_str(), NULL, NULL, SW_SHOW);
+      ShellExecute(nullptr, L"open", dir.value().c_str(), nullptr, nullptr,
+                   SW_SHOW);
     } else {
       LOG(WARNING) << " " << __func__ << "(): Can't open full_path = \""
                    << full_path.value() << "\""
@@ -326,29 +334,30 @@ void ShowItemInFolder(const base::FilePath& full_path) {
   base::ThreadPool::CreateCOMSTATaskRunner(
       {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
       ->PostTask(FROM_HERE,
-                 base::BindOnce(&ShowItemInFolderOnWorkerThread, full_path));
+                 base::BindOnce(&ShowItemInFolderOnWorkerThread,
+                                full_path.NormalizePathSeparators()));
 }
 
 void OpenPath(const base::FilePath& full_path, OpenCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  base::PostTaskAndReplyWithResult(
-      base::ThreadPool::CreateCOMSTATaskRunner(
-          {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
-          .get(),
-      FROM_HERE, base::BindOnce(&OpenPathOnThread, full_path),
-      std::move(callback));
+  base::ThreadPool::CreateCOMSTATaskRunner(
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
+      ->PostTaskAndReplyWithResult(
+          FROM_HERE,
+          base::BindOnce(&OpenPathOnThread,
+                         full_path.NormalizePathSeparators()),
+          std::move(callback));
 }
 
 void OpenExternal(const GURL& url,
                   const OpenExternalOptions& options,
                   OpenCallback callback) {
-  base::PostTaskAndReplyWithResult(
-      base::ThreadPool::CreateCOMSTATaskRunner(
-          {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
-          .get(),
-      FROM_HERE, base::BindOnce(&OpenExternalOnWorkerThread, url, options),
-      std::move(callback));
+  base::ThreadPool::CreateCOMSTATaskRunner(
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
+      ->PostTaskAndReplyWithResult(
+          FROM_HERE, base::BindOnce(&OpenExternalOnWorkerThread, url, options),
+          std::move(callback));
 }
 
 bool MoveItemToTrashWithError(const base::FilePath& path,
@@ -364,30 +373,17 @@ bool MoveItemToTrashWithError(const base::FilePath& path,
   // Elevation prompt enabled for UAC protected files.  This overrides the
   // SILENT, NO_UI and NOERRORUI flags.
 
-  if (base::win::GetVersion() >= base::win::Version::WIN8) {
-    // Windows 8 introduces the flag RECYCLEONDELETE and deprecates the
-    // ALLOWUNDO in favor of ADDUNDORECORD.
-    if (FAILED(pfo->SetOperationFlags(
-            FOF_NO_UI | FOFX_ADDUNDORECORD | FOF_NOERRORUI | FOF_SILENT |
-            FOFX_SHOWELEVATIONPROMPT | FOFX_RECYCLEONDELETE))) {
-      *error = "Failed to set operation flags";
-      return false;
-    }
-  } else {
-    // For Windows 7 and Vista, RecycleOnDelete is the default behavior.
-    if (FAILED(pfo->SetOperationFlags(FOF_NO_UI | FOF_ALLOWUNDO |
-                                      FOF_NOERRORUI | FOF_SILENT |
-                                      FOFX_SHOWELEVATIONPROMPT))) {
-      *error = "Failed to set operation flags";
-      return false;
-    }
+  if (FAILED(pfo->SetOperationFlags(
+          FOF_NO_UI | FOFX_ADDUNDORECORD | FOF_NOERRORUI | FOF_SILENT |
+          FOFX_SHOWELEVATIONPROMPT | FOFX_RECYCLEONDELETE))) {
+    *error = "Failed to set operation flags";
+    return false;
   }
 
   // Create an IShellItem from the supplied source path.
   Microsoft::WRL::ComPtr<IShellItem> delete_item;
-  if (FAILED(SHCreateItemFromParsingName(
-          path.value().c_str(), NULL,
-          IID_PPV_ARGS(delete_item.GetAddressOf())))) {
+  if (FAILED(SHCreateItemFromParsingName(path.value().c_str(), nullptr,
+                                         IID_PPV_ARGS(&delete_item)))) {
     *error = "Failed to parse path";
     return false;
   }
@@ -439,8 +435,8 @@ bool GetFolderPath(int key, base::FilePath* result) {
 
   switch (key) {
     case electron::DIR_RECENT:
-      if (FAILED(SHGetFolderPath(NULL, CSIDL_RECENT, NULL, SHGFP_TYPE_CURRENT,
-                                 system_buffer))) {
+      if (FAILED(SHGetFolderPath(nullptr, CSIDL_RECENT, nullptr,
+                                 SHGFP_TYPE_CURRENT, system_buffer))) {
         return false;
       }
       *result = base::FilePath(system_buffer);

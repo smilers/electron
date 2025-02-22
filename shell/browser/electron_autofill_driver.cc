@@ -18,7 +18,7 @@ namespace electron {
 AutofillDriver::AutofillDriver(content::RenderFrameHost* render_frame_host)
     : render_frame_host_(render_frame_host) {
   autofill_popup_ = std::make_unique<AutofillPopup>();
-}  // namespace electron
+}
 
 AutofillDriver::~AutofillDriver() = default;
 
@@ -36,7 +36,11 @@ void AutofillDriver::ShowAutofillPopup(
   v8::HandleScope scope(isolate);
   auto* web_contents = api::WebContents::From(
       content::WebContents::FromRenderFrameHost(render_frame_host_));
-  if (!web_contents || !web_contents->owner_window())
+  if (!web_contents)
+    return;
+
+  auto* owner_window = web_contents->owner_window();
+  if (!owner_window)
     return;
 
   auto* embedder = web_contents->embedder();
@@ -46,17 +50,17 @@ void AutofillDriver::ShowAutofillPopup(
   gfx::RectF popup_bounds(bounds);
   content::RenderFrameHost* embedder_frame_host = nullptr;
   if (embedder) {
-    auto* embedder_view = embedder->web_contents()->GetMainFrame()->GetView();
-    auto* view = web_contents->web_contents()->GetMainFrame()->GetView();
+    auto* embedder_view =
+        embedder->web_contents()->GetPrimaryMainFrame()->GetView();
+    auto* view = web_contents->web_contents()->GetPrimaryMainFrame()->GetView();
     auto offset = view->GetViewBounds().origin() -
                   embedder_view->GetViewBounds().origin();
     popup_bounds.Offset(offset);
-    embedder_frame_host = embedder->web_contents()->GetMainFrame();
+    embedder_frame_host = embedder->web_contents()->GetPrimaryMainFrame();
   }
 
   autofill_popup_->CreateView(render_frame_host_, embedder_frame_host, osr,
-                              web_contents->owner_window()->content_view(),
-                              popup_bounds);
+                              owner_window->content_view(), popup_bounds);
   autofill_popup_->SetItems(values, labels);
 }
 

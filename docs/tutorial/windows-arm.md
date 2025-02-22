@@ -8,7 +8,7 @@ If your app doesn't use any native modules, then it's really easy to create an A
 
 1. Make sure that your app's `node_modules` directory is empty.
 2. Using a _Command Prompt_, run `set npm_config_arch=arm64` before running `npm install`/`yarn install` as usual.
-3. [If you have Electron installed as a development dependency](quick-start.md#prerequisites), npm will download and unpack the arm64 version. You can then package and distribute your app as normal.
+3. [If you have Electron installed as a development dependency](tutorial-2-first-app.md#initializing-your-npm-project), npm will download and unpack the arm64 version. You can then package and distribute your app as normal.
 
 ## General considerations
 
@@ -88,7 +88,7 @@ After completing all of the above, open your cross-compilation command prompt an
 
 ## Debugging native modules
 
-Debugging native modules can be done with Visual Studio 2017 (running on your development machine) and corresponding [Visual Studio Remote Debugger](https://docs.microsoft.com/en-us/visualstudio/debugger/remote-debugging-cpp?view=vs-2019) running on the target device. To debug:
+Debugging native modules can be done with Visual Studio 2017 (running on your development machine) and corresponding [Visual Studio Remote Debugger](https://learn.microsoft.com/en-us/visualstudio/debugger/remote-debugging-cpp?view=vs-2019) running on the target device. To debug:
 
 1. Launch your app `.exe` on the target device via the _Command Prompt_ (passing `--inspect-brk` to pause it before any native modules are loaded).
 2. Launch Visual Studio 2017 on your development machine.

@@ -9,22 +9,30 @@
 #include <utility>
 
 #include "base/files/file_util.h"
-#include "base/no_destructor.h"
 #include "base/path_service.h"
-#include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/common/chrome_paths.h"
 #include "shell/browser/browser_observer.h"
 #include "shell/browser/electron_browser_main_parts.h"
-#include "shell/browser/login_handler.h"
 #include "shell/browser/native_window.h"
 #include "shell/browser/window_list.h"
 #include "shell/common/application_info.h"
-#include "shell/common/electron_paths.h"
+#include "shell/common/gin_converters/login_item_settings_converter.h"
 #include "shell/common/gin_helper/arguments.h"
+#include "shell/common/thread_restrictions.h"
 
 namespace electron {
+
+LoginItemSettings::LoginItemSettings() = default;
+LoginItemSettings::~LoginItemSettings() = default;
+LoginItemSettings::LoginItemSettings(const LoginItemSettings& other) = default;
+
+#if BUILDFLAG(IS_WIN)
+LaunchItem::LaunchItem() = default;
+LaunchItem::~LaunchItem() = default;
+LaunchItem::LaunchItem(const LaunchItem& other) = default;
+#endif
 
 namespace {
 
@@ -36,21 +44,11 @@ namespace {
 void RunQuitClosure(base::OnceClosure quit) {
   // On Linux/Windows the "ready" event is emitted in "PreMainMessageLoopRun",
   // make sure we quit after message loop has run for once.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(quit));
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                              std::move(quit));
 }
 
 }  // namespace
-
-#if BUILDFLAG(IS_WIN)
-Browser::LaunchItem::LaunchItem() = default;
-Browser::LaunchItem::~LaunchItem() = default;
-Browser::LaunchItem::LaunchItem(const LaunchItem& other) = default;
-#endif
-
-Browser::LoginItemSettings::LoginItemSettings() = default;
-Browser::LoginItemSettings::~LoginItemSettings() = default;
-Browser::LoginItemSettings::LoginItemSettings(const LoginItemSettings& other) =
-    default;
 
 Browser::Browser() {
   WindowList::AddObserver(this);
@@ -58,6 +56,14 @@ Browser::Browser() {
 
 Browser::~Browser() {
   WindowList::RemoveObserver(this);
+}
+
+void Browser::AddObserver(BrowserObserver* obs) {
+  observers_.AddObserver(obs);
+}
+
+void Browser::RemoveObserver(BrowserObserver* obs) {
+  observers_.RemoveObserver(obs);
 }
 
 // static
@@ -157,10 +163,6 @@ void Browser::SetName(const std::string& name) {
   OverriddenApplicationName() = name;
 }
 
-int Browser::GetBadgeCount() {
-  return badge_count_;
-}
-
 bool Browser::OpenFile(const std::string& file_path) {
   bool prevent_default = false;
   for (BrowserObserver& observer : observers_)
@@ -184,19 +186,23 @@ void Browser::WillFinishLaunching() {
     observer.OnWillFinishLaunching();
 }
 
-void Browser::DidFinishLaunching(base::DictionaryValue launch_info) {
+void Browser::DidFinishLaunching(base::Value::Dict launch_info) {
   // Make sure the userData directory is created.
-  base::ThreadRestrictions::ScopedAllowIO allow_io;
+  ScopedAllowBlockingForElectron allow_blocking;
   base::FilePath user_data;
-  if (base::PathService::Get(chrome::DIR_USER_DATA, &user_data))
+  if (base::PathService::Get(chrome::DIR_USER_DATA, &user_data)) {
     base::CreateDirectoryAndGetError(user_data, nullptr);
+#if BUILDFLAG(IS_WIN)
+    base::SetExtraNoExecuteAllowedPath(chrome::DIR_USER_DATA);
+#endif
+  }
 
   is_ready_ = true;
   if (ready_promise_) {
     ready_promise_->Resolve();
   }
   for (BrowserObserver& observer : observers_)
-    observer.OnFinishLaunching(launch_info);
+    observer.OnFinishLaunching(launch_info.Clone());
 }
 
 v8::Local<v8::Value> Browser::WhenReady(v8::Isolate* isolate) {
@@ -284,6 +290,11 @@ void Browser::NewWindowForTab() {
 void Browser::DidBecomeActive() {
   for (BrowserObserver& observer : observers_)
     observer.OnDidBecomeActive();
+}
+
+void Browser::DidResignActive() {
+  for (BrowserObserver& observer : observers_)
+    observer.OnDidResignActive();
 }
 #endif
 

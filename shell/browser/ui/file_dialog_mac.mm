@@ -5,23 +5,26 @@
 #include "shell/browser/ui/file_dialog.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #import <Cocoa/Cocoa.h>
 #import <CoreServices/CoreServices.h>
 
+#include "base/apple/foundation_util.h"
+#include "base/apple/scoped_cftyperef.h"
 #include "base/files/file_util.h"
-#include "base/mac/foundation_util.h"
 #include "base/mac/mac_util.h"
-#include "base/mac/scoped_cftyperef.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/task/post_task.h"
-#include "base/threading/thread_restrictions.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "electron/mas.h"
 #include "shell/browser/native_window.h"
 #include "shell/common/gin_converters/file_path_converter.h"
+#include "shell/common/gin_helper/dictionary.h"
+#include "shell/common/gin_helper/promise.h"
+#include "shell/common/thread_restrictions.h"
 
 @interface PopUpButtonHandler : NSObject
 
@@ -67,15 +70,18 @@
 
 // Manages the PopUpButtonHandler.
 @interface ElectronAccessoryView : NSView
+@property(nonatomic, strong) PopUpButtonHandler* popUpButtonHandler;
 @end
 
 @implementation ElectronAccessoryView
 
+@synthesize popUpButtonHandler;
+
 - (void)dealloc {
   auto* popupButton =
       static_cast<NSPopUpButton*>([[self subviews] objectAtIndex:1]);
-  [[popupButton target] release];
-  [super dealloc];
+  popupButton.target = nil;
+  popUpButtonHandler = nil;
 }
 
 @end
@@ -149,10 +155,11 @@ void SetAllowedFileTypes(NSSavePanel* dialog, const Filters& filters) {
   [popupButton setTarget:popUpButtonHandler];
   [popupButton setAction:@selector(selectFormat:)];
 
-  [accessoryView addSubview:[label autorelease]];
-  [accessoryView addSubview:[popupButton autorelease]];
+  [accessoryView addSubview:label];
+  [accessoryView addSubview:popupButton];
+  [accessoryView setPopUpButtonHandler:popUpButtonHandler];
 
-  [dialog setAccessoryView:[accessoryView autorelease]];
+  [dialog setAccessoryView:accessoryView];
 }
 
 void SetupDialog(NSSavePanel* dialog, const DialogSettings& settings) {
@@ -174,7 +181,7 @@ void SetupDialog(NSSavePanel* dialog, const DialogSettings& settings) {
   NSString* default_dir = nil;
   NSString* default_filename = nil;
   if (!settings.default_path.empty()) {
-    base::ThreadRestrictions::ScopedAllowIO allow_io;
+    electron::ScopedAllowBlockingForElectron allow_blocking;
     if (base::DirectoryExists(settings.default_path)) {
       default_dir = base::SysUTF8ToNSString(settings.default_path.value());
     } else {
@@ -233,7 +240,7 @@ void SetupSaveDialogForProperties(NSSavePanel* dialog, int properties) {
 
 // Run modal dialog with parent window and return user's choice.
 int RunModalDialog(NSSavePanel* dialog, const DialogSettings& settings) {
-  __block int chosen = NSFileHandlingPanelCancelButton;
+  __block int chosen = NSModalResponseCancel;
   if (!settings.parent_window || !settings.parent_window->GetNativeWindow() ||
       settings.force_detached) {
     chosen = [dialog runModal];
@@ -282,11 +289,29 @@ void ReadDialogPathsWithBookmarks(NSOpenPanel* dialog,
                                   std::vector<base::FilePath>* paths,
                                   std::vector<std::string>* bookmarks) {
   NSArray* urls = [dialog URLs];
-  for (NSURL* url in urls)
-    if ([url isFileURL]) {
-      paths->push_back(base::FilePath(base::SysNSStringToUTF8([url path])));
-      bookmarks->push_back(GetBookmarkDataFromNSURL(url));
+  for (NSURL* url in urls) {
+    if (![url isFileURL])
+      continue;
+
+    NSString* path = [url path];
+
+    // There's a bug in macOS where despite a request to disallow file
+    // selection, files/packages can be selected. If file selection
+    // was disallowed, drop any files selected. See crbug.com/1357523.
+    if (![dialog canChooseFiles]) {
+      BOOL is_directory;
+      BOOL exists =
+          [[NSFileManager defaultManager] fileExistsAtPath:path
+                                               isDirectory:&is_directory];
+      BOOL is_package =
+          [[NSWorkspace sharedWorkspace] isFilePackageAtPath:path];
+      if (!exists || !is_directory || is_package)
+        continue;
     }
+
+    paths->emplace_back(base::SysNSStringToUTF8(path));
+    bookmarks->push_back(GetBookmarkDataFromNSURL(url));
+  }
 }
 
 void ReadDialogPaths(NSOpenPanel* dialog, std::vector<base::FilePath>* paths) {
@@ -301,13 +326,12 @@ void ResolvePromiseInNextTick(gin_helper::Promise<v8::Local<v8::Value>> promise,
   // users will run in the microtask, we have to delay the resolution until
   // next tick, otherwise crash like this may happen:
   // https://github.com/electron/electron/issues/26884
-  base::PostTask(
-      FROM_HERE, {content::BrowserThread::UI},
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
       base::BindOnce(
           [](gin_helper::Promise<v8::Local<v8::Value>> promise,
              v8::Global<v8::Value> global) {
             v8::Isolate* isolate = promise.isolate();
-            v8::Locker locker(isolate);
             v8::HandleScope handle_scope(isolate);
             v8::Local<v8::Value> value = global.Get(isolate);
             promise.Resolve(value);
@@ -326,7 +350,7 @@ bool ShowOpenDialogSync(const DialogSettings& settings,
   SetupOpenDialogForProperties(dialog, settings.properties);
 
   int chosen = RunModalDialog(dialog, settings);
-  if (chosen == NSFileHandlingPanelCancelButton)
+  if (chosen == NSModalResponseCancel)
     return false;
 
   ReadDialogPaths(dialog, paths);
@@ -338,17 +362,17 @@ void OpenDialogCompletion(int chosen,
                           bool security_scoped_bookmarks,
                           gin_helper::Promise<gin_helper::Dictionary> promise) {
   v8::HandleScope scope(promise.isolate());
-  gin_helper::Dictionary dict = gin::Dictionary::CreateEmpty(promise.isolate());
-  if (chosen == NSFileHandlingPanelCancelButton) {
+  auto dict = gin_helper::Dictionary::CreateEmpty(promise.isolate());
+  if (chosen == NSModalResponseCancel) {
     dict.Set("canceled", true);
     dict.Set("filePaths", std::vector<base::FilePath>());
-#if defined(MAS_BUILD)
+#if IS_MAS_BUILD()
     dict.Set("bookmarks", std::vector<std::string>());
 #endif
   } else {
     std::vector<base::FilePath> paths;
     dict.Set("canceled", false);
-#if defined(MAS_BUILD)
+#if IS_MAS_BUILD()
     std::vector<std::string> bookmarks;
     if (security_scoped_bookmarks)
       ReadDialogPathsWithBookmarks(dialog, &paths, &bookmarks);
@@ -404,7 +428,7 @@ bool ShowSaveDialogSync(const DialogSettings& settings, base::FilePath* path) {
   SetupSaveDialogForProperties(dialog, settings.properties);
 
   int chosen = RunModalDialog(dialog, settings);
-  if (chosen == NSFileHandlingPanelCancelButton || ![[dialog URL] isFileURL])
+  if (chosen == NSModalResponseCancel || ![[dialog URL] isFileURL])
     return false;
 
   *path = base::FilePath(base::SysNSStringToUTF8([[dialog URL] path]));
@@ -416,18 +440,18 @@ void SaveDialogCompletion(int chosen,
                           bool security_scoped_bookmarks,
                           gin_helper::Promise<gin_helper::Dictionary> promise) {
   v8::HandleScope scope(promise.isolate());
-  gin_helper::Dictionary dict = gin::Dictionary::CreateEmpty(promise.isolate());
-  if (chosen == NSFileHandlingPanelCancelButton) {
+  auto dict = gin_helper::Dictionary::CreateEmpty(promise.isolate());
+  if (chosen == NSModalResponseCancel) {
     dict.Set("canceled", true);
     dict.Set("filePath", base::FilePath());
-#if defined(MAS_BUILD)
-    dict.Set("bookmark", base::StringPiece());
+#if IS_MAS_BUILD()
+    dict.Set("bookmark", std::string_view{});
 #endif
   } else {
     std::string path = base::SysNSStringToUTF8([[dialog URL] path]);
     dict.Set("filePath", base::FilePath(path));
     dict.Set("canceled", false);
-#if defined(MAS_BUILD)
+#if IS_MAS_BUILD()
     std::string bookmark;
     if (security_scoped_bookmarks) {
       bookmark = GetBookmarkDataFromNSURL([dialog URL]);

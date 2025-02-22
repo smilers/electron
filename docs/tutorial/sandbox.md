@@ -12,30 +12,12 @@ the GPU service and the network service.
 
 See Chromium's [Sandbox design document][sandbox] for more information.
 
-## Electron's sandboxing policies
+Starting from Electron 20, the sandbox is enabled for renderer processes without any
+further configuration. If you want to disable the sandbox for a process, see the
+[Disabling the sandbox for a single process](#disabling-the-sandbox-for-a-single-process)
+section.
 
-Electron comes with a mixed sandbox environment, meaning sandboxed processes can run
-alongside privileged ones. By default, renderer processes are not sandboxed, but
-utility processes are. Note that as in Chromium, the main (browser) process is
-privileged and cannot be sandboxed.
-
-Historically, this mixed sandbox approach was established because having Node.js available
-in the renderer is an extremely powerful tool for app developers. Unfortunately, this
-feature is also an equally massive security vulnerability.
-
-Theoretically, unsandboxed renderers are not a problem for desktop applications that
-only display trusted code, but they make Electron less secure than Chromium for
-displaying untrusted web content. However, even purportedly trusted code may be
-dangerous — there are countless attack vectors that malicious actors can use, from
-cross-site scripting to content injection to man-in-the-middle attacks on remotely loaded
-websites, just to name a few. For this reason, we recommend enabling renderer sandboxing
-for the vast majority of cases under an abundance of caution.
-
-<!--TODO: update this guide when #28466 is either solved or closed -->
-Note that there is an active discussion in the issue tracker to enable renderer sandboxing
-by default. See [#28466][issue-28466]) for details.
-
-## Sandbox behaviour in Electron
+## Sandbox behavior in Electron
 
 Sandboxed processes in Electron behave _mostly_ in the same way as Chromium's do, but
 Electron has a few additional concepts to consider because it interfaces with Node.js.
@@ -46,11 +28,16 @@ When renderer processes in Electron are sandboxed, they behave in the same way a
 regular Chrome renderer would. A sandboxed renderer won't have a Node.js
 environment initialized.
 
-<!-- TODO(erickzhao): when we have a solid guide for IPC, link it here -->
 Therefore, when the sandbox is enabled, renderer processes can only perform privileged
 tasks (such as interacting with the filesystem, making changes to the system, or spawning
 subprocesses) by delegating these tasks to the main process via inter-process
 communication (IPC).
+
+:::note
+
+For more info on inter-process communication, check out our [IPC guide](./ipc.md).
+
+:::
 
 ### Preload scripts
 
@@ -59,14 +46,20 @@ scripts attached to sandboxed renderers will still have a polyfilled subset of N
 APIs available. A `require` function similar to Node's `require` module is exposed,
 but can only import a subset of Electron and Node's built-in modules:
 
-* `electron` (only renderer process modules)
+* `electron` (following renderer process modules: `contextBridge`, `crashReporter`, `ipcRenderer`, `nativeImage`, `webFrame`, `webUtils`)
 * [`events`](https://nodejs.org/api/events.html)
 * [`timers`](https://nodejs.org/api/timers.html)
 * [`url`](https://nodejs.org/api/url.html)
 
+[node: imports](https://nodejs.org/api/esm.html#node-imports) are supported as well:
+
+* [`node:events`](https://nodejs.org/api/events.html)
+* [`node:timers`](https://nodejs.org/api/timers.html)
+* [`node:url`](https://nodejs.org/api/url.html)
+
 In addition, the preload script also polyfills certain Node.js primitives as globals:
 
-* [`Buffer`](https://nodejs.org/api/Buffer.html)
+* [`Buffer`](https://nodejs.org/api/buffer.html)
 * [`process`](../api/process.md)
 * [`clearImmediate`](https://nodejs.org/api/timers.html#timers_clearimmediate_immediate)
 * [`setImmediate`](https://nodejs.org/api/timers.html#timers_setimmediate_callback_args)
@@ -83,17 +76,35 @@ privileged APIs to untrusted code running in the renderer process unless
 
 ## Configuring the sandbox
 
-### Enabling the sandbox for a single process
+For most apps, sandboxing is the best choice. In certain use cases that are incompatible with
+the sandbox (for instance, when using native node modules in the renderer),
+it is possible to disable the sandbox for specific processes. This comes with security
+risks, especially if any untrusted code or content is present in the unsandboxed process.
 
-In Electron, renderer sandboxing can be enabled on a per-process basis with
-the `sandbox: true` preference in the [`BrowserWindow`][browser-window] constructor.
+### Disabling the sandbox for a single process
 
-```js
-// main.js
+In Electron, renderer sandboxing can be disabled on a per-process basis with
+the `sandbox: false` preference in the [`BrowserWindow`][browser-window] constructor.
+
+```js title='main.js'
 app.whenReady().then(() => {
   const win = new BrowserWindow({
     webPreferences: {
-      sandbox: true
+      sandbox: false
+    }
+  })
+  win.loadURL('https://google.com')
+})
+```
+
+Sandboxing is also disabled whenever Node.js integration is enabled in the renderer.
+This can be done through the BrowserWindow constructor with the `nodeIntegration: true` flag.
+
+```js title='main.js'
+app.whenReady().then(() => {
+  const win = new BrowserWindow({
+    webPreferences: {
+      nodeIntegration: true
     }
   })
   win.loadURL('https://google.com')
@@ -106,11 +117,10 @@ If you want to force sandboxing for all renderers, you can also use the
 [`app.enableSandbox`][enable-sandbox] API. Note that this API has to be called before the
 app's `ready` event.
 
-```js
-// main.js
+```js title='main.js'
 app.enableSandbox()
 app.whenReady().then(() => {
-  // no need to pass `sandbox: true` since `app.enableSandbox()` was called.
+  // any sandbox:false calls are overridden since `app.enableSandbox()` was called.
   const win = new BrowserWindow()
   win.loadURL('https://google.com')
 })
@@ -139,16 +149,16 @@ issues:
    have, to inherit everything we can from Chromium, and to respond quickly to
    security issues, but Electron cannot be as secure as Chromium without the
    resources that Chromium is able to dedicate.
-2. Some security features in Chrome (such as Safe Browsing and Certificate
+1. Some security features in Chrome (such as Safe Browsing and Certificate
    Transparency) require a centralized authority and dedicated servers, both of
    which run counter to the goals of the Electron project. As such, we disable
    those features in Electron, at the cost of the associated security they
    would otherwise bring.
-3. There is only one Chromium, whereas there are many thousands of apps built
+1. There is only one Chromium, whereas there are many thousands of apps built
    on Electron, all of which behave slightly differently. Accounting for those
    differences can yield a huge possibility space, and make it challenging to
    ensure the security of the platform in unusual use cases.
-4. We can't push security updates to users directly, so we rely on app vendors
+1. We can't push security updates to users directly, so we rely on app vendors
    to upgrade the version of Electron underlying their app in order for
    security updates to reach users.
 
@@ -158,7 +168,6 @@ backported. Your best chance at staying secure is to be on the latest stable
 version of Electron.
 
 [sandbox]: https://chromium.googlesource.com/chromium/src/+/main/docs/design/sandbox.md
-[issue-28466]: https://github.com/electron/electron/issues/28466
 [browser-window]: ../api/browser-window.md
 [enable-sandbox]: ../api/app.md#appenablesandbox
 [no-sandbox]: ../api/command-line-switches.md#--no-sandbox

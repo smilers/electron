@@ -11,9 +11,8 @@
 
 #import "shell/browser/ui/cocoa/electron_menu_controller.h"
 
-using base::scoped_nsobject;
-
 namespace electron {
+class NativeWindow;
 
 namespace api {
 
@@ -22,10 +21,12 @@ class MenuMac : public Menu {
   explicit MenuMac(gin::Arguments* args);
   ~MenuMac() override;
 
+  // Menu
   void PopupAt(BaseWindow* window,
                int x,
                int y,
                int positioning_item,
+               ui::mojom::MenuSourceType source_type,
                base::OnceClosure callback) override;
   void PopupOnUI(const base::WeakPtr<NativeWindow>& native_window,
                  int32_t window_id,
@@ -42,16 +43,15 @@ class MenuMac : public Menu {
   void ClosePopupOnUI(int32_t window_id);
   void OnClosed(int32_t window_id, base::OnceClosure callback);
 
-  scoped_nsobject<ElectronMenuController> menu_controller_;
+  ElectronMenuController* __strong menu_controller_;
 
   // window ID -> open context menu
-  std::map<int32_t, scoped_nsobject<ElectronMenuController>> popup_controllers_;
+  std::map<int32_t, ElectronMenuController*> popup_controllers_;
 
   base::WeakPtrFactory<MenuMac> weak_factory_{this};
 };
 
 }  // namespace api
-
 }  // namespace electron
 
 #endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_MENU_MAC_H_

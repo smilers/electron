@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "gin/handle.h"
 #include "net/base/filename_util.h"
 #include "shell/browser/electron_browser_main_parts.h"
 #include "shell/common/gin_converters/file_dialog_converter.h"
@@ -15,7 +15,6 @@
 #include "shell/common/gin_converters/gurl_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
-#include "shell/common/node_includes.h"
 #include "url/gurl.h"
 
 namespace gin {
@@ -48,9 +47,7 @@ struct Converter<download::DownloadItem::DownloadState> {
 
 }  // namespace gin
 
-namespace electron {
-
-namespace api {
+namespace electron::api {
 
 namespace {
 
@@ -152,6 +149,12 @@ void DownloadItem::Cancel() {
   download_item_->Cancel(true);
 }
 
+int64_t DownloadItem::GetCurrentBytesPerSecond() const {
+  if (!CheckAlive())
+    return 0;
+  return download_item_->CurrentSpeed();
+}
+
 int64_t DownloadItem::GetReceivedBytes() const {
   if (!CheckAlive())
     return 0;
@@ -162,6 +165,12 @@ int64_t DownloadItem::GetTotalBytes() const {
   if (!CheckAlive())
     return 0;
   return download_item_->GetTotalBytes();
+}
+
+int DownloadItem::GetPercentComplete() const {
+  if (!CheckAlive())
+    return 0;
+  return download_item_->PercentComplete();
 }
 
 std::string DownloadItem::GetMimeType() const {
@@ -200,7 +209,7 @@ const GURL& DownloadItem::GetURL() const {
 
 v8::Local<v8::Value> DownloadItem::GetURLChain() const {
   if (!CheckAlive())
-    return v8::Local<v8::Value>();
+    return {};
   return gin::ConvertToV8(isolate_, download_item_->GetUrlChain());
 }
 
@@ -248,7 +257,13 @@ std::string DownloadItem::GetETag() const {
 double DownloadItem::GetStartTime() const {
   if (!CheckAlive())
     return 0;
-  return download_item_->GetStartTime().ToDoubleT();
+  return download_item_->GetStartTime().InSecondsFSinceUnixEpoch();
+}
+
+double DownloadItem::GetEndTime() const {
+  if (!CheckAlive())
+    return 0;
+  return download_item_->GetEndTime().InSecondsFSinceUnixEpoch();
 }
 
 // static
@@ -261,8 +276,11 @@ gin::ObjectTemplateBuilder DownloadItem::GetObjectTemplateBuilder(
       .SetMethod("resume", &DownloadItem::Resume)
       .SetMethod("canResume", &DownloadItem::CanResume)
       .SetMethod("cancel", &DownloadItem::Cancel)
+      .SetMethod("getCurrentBytesPerSecond",
+                 &DownloadItem::GetCurrentBytesPerSecond)
       .SetMethod("getReceivedBytes", &DownloadItem::GetReceivedBytes)
       .SetMethod("getTotalBytes", &DownloadItem::GetTotalBytes)
+      .SetMethod("getPercentComplete", &DownloadItem::GetPercentComplete)
       .SetMethod("getMimeType", &DownloadItem::GetMimeType)
       .SetMethod("hasUserGesture", &DownloadItem::HasUserGesture)
       .SetMethod("getFilename", &DownloadItem::GetFilename)
@@ -279,7 +297,8 @@ gin::ObjectTemplateBuilder DownloadItem::GetObjectTemplateBuilder(
       .SetMethod("getSaveDialogOptions", &DownloadItem::GetSaveDialogOptions)
       .SetMethod("getLastModifiedTime", &DownloadItem::GetLastModifiedTime)
       .SetMethod("getETag", &DownloadItem::GetETag)
-      .SetMethod("getStartTime", &DownloadItem::GetStartTime);
+      .SetMethod("getStartTime", &DownloadItem::GetStartTime)
+      .SetMethod("getEndTime", &DownloadItem::GetEndTime);
 }
 
 const char* DownloadItem::GetTypeName() {
@@ -301,6 +320,4 @@ gin::Handle<DownloadItem> DownloadItem::FromOrCreate(
   return handle;
 }
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api

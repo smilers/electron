@@ -12,19 +12,18 @@
 #include <dwmapi.h>
 #include <memory>
 
-#include "base/win/windows_version.h"
 #include "shell/browser/native_window_views.h"
 #include "shell/browser/ui/views/win_caption_button_container.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/win/hwnd_metrics.h"
 #include "ui/display/win/dpi.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/gfx/geometry/dip_util.h"
+#include "ui/views/background.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/win/hwnd_util.h"
 
 namespace electron {
-
-const char WinFrameView::kViewClassName[] = "WinFrameView";
 
 WinFrameView::WinFrameView() = default;
 
@@ -34,19 +33,9 @@ void WinFrameView::Init(NativeWindowViews* window, views::Widget* frame) {
   window_ = window;
   frame_ = frame;
 
-  // Prevent events from trickling down the views hierarchy here, since
-  // when a given resizable window is frameless we only want to use
-  // FramelessView's ResizingBorderHitTest in
-  // ShouldDescendIntoChildForEventHandling. See
-  // https://chromium-review.googlesource.com/c/chromium/src/+/3251980.
-  if (!window_->has_frame() && window_->IsResizable())
-    frame_->client_view()->SetCanProcessEventsWithinSubtree(false);
-
   if (window->IsWindowControlsOverlayEnabled()) {
     caption_button_container_ =
         AddChildView(std::make_unique<WinCaptionButtonContainer>(this));
-  } else {
-    caption_button_container_ = nullptr;
   }
 }
 
@@ -63,9 +52,10 @@ SkColor WinFrameView::GetReadableFeatureColor(SkColor background_color) {
 }
 
 void WinFrameView::InvalidateCaptionButtons() {
-  // Ensure that the caption buttons container exists
-  DCHECK(caption_button_container_);
+  if (!caption_button_container_)
+    return;
 
+  caption_button_container_->UpdateBackground();
   caption_button_container_->InvalidateLayout();
   caption_button_container_->SchedulePaint();
 }
@@ -83,11 +73,29 @@ int WinFrameView::FrameBorderThickness() const {
              : display::win::ScreenWin::GetSystemMetricsInDIP(SM_CXSIZEFRAME);
 }
 
+views::View* WinFrameView::TargetForRect(views::View* root,
+                                         const gfx::Rect& rect) {
+  if (NonClientHitTest(rect.origin()) != HTCLIENT) {
+    // Custom system titlebar returns non HTCLIENT value, however event should
+    // be handled by the view, not by the system, because there are no system
+    // buttons underneath.
+    if (!window()->IsWindowControlsOverlayEnabled())
+      return this;
+
+    auto local_point = rect.origin();
+    ConvertPointToTarget(parent(), caption_button_container_, &local_point);
+    if (!caption_button_container_->HitTestPoint(local_point))
+      return this;
+  }
+
+  return NonClientFrameView::TargetForRect(root, rect);
+}
+
 int WinFrameView::NonClientHitTest(const gfx::Point& point) {
-  if (window_->has_frame())
+  if (window()->has_frame())
     return frame_->client_view()->NonClientHitTest(point);
 
-  if (ShouldCustomDrawSystemTitlebar()) {
+  if (window()->IsWindowControlsOverlayEnabled()) {
     // See if the point is within any of the window controls.
     if (caption_button_container_) {
       gfx::Point local_point = point;
@@ -105,37 +113,35 @@ int WinFrameView::NonClientHitTest(const gfx::Point& point) {
     // corner of the window. This code ensures the mouse isn't set to a size
     // cursor while hovering over the caption buttons, thus giving the incorrect
     // impression that the user can resize the window.
-    if (base::win::GetVersion() >= base::win::Version::WIN8) {
-      RECT button_bounds = {0};
-      if (SUCCEEDED(DwmGetWindowAttribute(
-              views::HWNDForWidget(frame()), DWMWA_CAPTION_BUTTON_BOUNDS,
-              &button_bounds, sizeof(button_bounds)))) {
-        gfx::RectF button_bounds_in_dips = gfx::ConvertRectToDips(
-            gfx::Rect(button_bounds), display::win::GetDPIScale());
-        // TODO(crbug.com/1131681): GetMirroredRect() requires an integer rect,
-        // but the size in DIPs may not be an integer with a fractional device
-        // scale factor. If we want to keep using integers, the choice to use
-        // ToFlooredRectDeprecated() seems to be doing the wrong thing given the
-        // comment below about insetting 1 DIP instead of 1 physical pixel. We
-        // should probably use ToEnclosedRect() and then we could have inset 1
-        // physical pixel here.
-        gfx::Rect buttons = GetMirroredRect(
-            gfx::ToFlooredRectDeprecated(button_bounds_in_dips));
+    RECT button_bounds = {0};
+    if (SUCCEEDED(DwmGetWindowAttribute(
+            views::HWNDForWidget(frame()), DWMWA_CAPTION_BUTTON_BOUNDS,
+            &button_bounds, sizeof(button_bounds)))) {
+      gfx::RectF button_bounds_in_dips = gfx::ConvertRectToDips(
+          gfx::Rect(button_bounds), display::win::GetDPIScale());
+      // TODO(crbug.com/1131681): GetMirroredRect() requires an integer rect,
+      // but the size in DIPs may not be an integer with a fractional device
+      // scale factor. If we want to keep using integers, the choice to use
+      // ToFlooredRectDeprecated() seems to be doing the wrong thing given the
+      // comment below about insetting 1 DIP instead of 1 physical pixel. We
+      // should probably use ToEnclosedRect() and then we could have inset 1
+      // physical pixel here.
+      gfx::Rect buttons =
+          GetMirroredRect(gfx::ToFlooredRectDeprecated(button_bounds_in_dips));
 
-        // There is a small one-pixel strip right above the caption buttons in
-        // which the resize border "peeks" through.
-        constexpr int kCaptionButtonTopInset = 1;
-        // The sizing region at the window edge above the caption buttons is
-        // 1 px regardless of scale factor. If we inset by 1 before converting
-        // to DIPs, the precision loss might eliminate this region entirely. The
-        // best we can do is to inset after conversion. This guarantees we'll
-        // show the resize cursor when resizing is possible. The cost of which
-        // is also maybe showing it over the portion of the DIP that isn't the
-        // outermost pixel.
-        buttons.Inset(gfx::Insets::TLBR(0, kCaptionButtonTopInset, 0, 0));
-        if (buttons.Contains(point))
-          return HTNOWHERE;
-      }
+      // There is a small one-pixel strip right above the caption buttons in
+      // which the resize border "peeks" through.
+      constexpr int kCaptionButtonTopInset = 1;
+      // The sizing region at the window edge above the caption buttons is
+      // 1 px regardless of scale factor. If we inset by 1 before converting
+      // to DIPs, the precision loss might eliminate this region entirely. The
+      // best we can do is to inset after conversion. This guarantees we'll
+      // show the resize cursor when resizing is possible. The cost of which
+      // is also maybe showing it over the portion of the DIP that isn't the
+      // outermost pixel.
+      buttons.Inset(gfx::Insets::TLBR(0, kCaptionButtonTopInset, 0, 0));
+      if (buttons.Contains(point))
+        return HTNOWHERE;
     }
 
     int top_border_thickness = FrameTopBorderThickness(false);
@@ -154,24 +160,16 @@ int WinFrameView::NonClientHitTest(const gfx::Point& point) {
   return FramelessView::NonClientHitTest(point);
 }
 
-const char* WinFrameView::GetClassName() const {
-  return kViewClassName;
-}
-
 bool WinFrameView::IsMaximized() const {
   return frame()->IsMaximized();
 }
 
-bool WinFrameView::ShouldCustomDrawSystemTitlebar() const {
-  return window()->IsWindowControlsOverlayEnabled();
-}
-
-void WinFrameView::Layout() {
+void WinFrameView::Layout(PassKey) {
   LayoutCaptionButtons();
   if (window()->IsWindowControlsOverlayEnabled()) {
     LayoutWindowControlsOverlay();
   }
-  NonClientFrameView::Layout();
+  LayoutSuperclass<NonClientFrameView>(this);
 }
 
 int WinFrameView::FrameTopBorderThickness(bool restored) const {
@@ -191,7 +189,7 @@ int WinFrameView::FrameTopBorderThicknessPx(bool restored) const {
 
   // See comments in BrowserDesktopWindowTreeHostWin::GetClientAreaInsets().
   const bool needs_no_border =
-      (ShouldCustomDrawSystemTitlebar() && frame()->IsMaximized()) ||
+      (window()->IsWindowControlsOverlayEnabled() && frame()->IsMaximized()) ||
       frame()->IsFullscreen();
   if (needs_no_border && !restored)
     return 0;
@@ -239,7 +237,7 @@ void WinFrameView::LayoutCaptionButtons() {
     return;
 
   // Non-custom system titlebar already contains caption buttons.
-  if (!ShouldCustomDrawSystemTitlebar()) {
+  if (!window()->IsWindowControlsOverlayEnabled()) {
     caption_button_container_->SetVisible(false);
     return;
   }
@@ -282,5 +280,8 @@ void WinFrameView::LayoutWindowControlsOverlay() {
   window()->SetWindowControlsOverlayRect(bounding_rect);
   window()->NotifyLayoutWindowControlsOverlay();
 }
+
+BEGIN_METADATA(WinFrameView)
+END_METADATA
 
 }  // namespace electron

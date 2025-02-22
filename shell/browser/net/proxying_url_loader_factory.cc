@@ -7,12 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/string_split.h"
-#include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/extension_navigation_ui_data.h"
 #include "net/base/completion_repeating_callback.h"
@@ -21,11 +19,12 @@
 #include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
 #include "net/url_request/redirect_info.h"
-#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "shell/browser/net/asar/asar_url_loader.h"
 #include "shell/common/options_switches.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/origin.h"
 
 namespace electron {
@@ -93,11 +92,11 @@ ProxyingURLLoaderFactory::InProgressRequest::~InProgressRequest() {
   }
   if (on_before_send_headers_callback_) {
     std::move(on_before_send_headers_callback_)
-        .Run(net::ERR_ABORTED, absl::nullopt);
+        .Run(net::ERR_ABORTED, std::nullopt);
   }
   if (on_headers_received_callback_) {
     std::move(on_headers_received_callback_)
-        .Run(net::ERR_ABORTED, absl::nullopt, absl::nullopt);
+        .Run(net::ERR_ABORTED, std::nullopt, std::nullopt);
   }
 }
 
@@ -120,8 +119,7 @@ void ProxyingURLLoaderFactory::InProgressRequest::UpdateRequestInfo() {
                                     : nullptr,
       request_for_info, false,
       !(options_ & network::mojom::kURLLoadOptionSynchronous),
-      factory_->IsForServiceWorkerScript(), factory_->navigation_id_,
-      ukm::kInvalidSourceIdObj));
+      factory_->IsForServiceWorkerScript(), factory_->navigation_id_));
 
   current_request_uses_header_client_ =
       factory_->url_loader_header_client_receiver_.is_bound() &&
@@ -183,7 +181,7 @@ void ProxyingURLLoaderFactory::InProgressRequest::FollowRedirect(
     const std::vector<std::string>& removed_headers,
     const net::HttpRequestHeaders& modified_headers,
     const net::HttpRequestHeaders& modified_cors_exempt_headers,
-    const absl::optional<GURL>& new_url) {
+    const std::optional<GURL>& new_url) {
   if (new_url)
     request_.url = new_url.value();
 
@@ -224,16 +222,6 @@ void ProxyingURLLoaderFactory::InProgressRequest::SetPriority(
     target_loader_->SetPriority(priority, intra_priority_value);
 }
 
-void ProxyingURLLoaderFactory::InProgressRequest::PauseReadingBodyFromNet() {
-  if (target_loader_.is_bound())
-    target_loader_->PauseReadingBodyFromNet();
-}
-
-void ProxyingURLLoaderFactory::InProgressRequest::ResumeReadingBodyFromNet() {
-  if (target_loader_.is_bound())
-    target_loader_->ResumeReadingBodyFromNet();
-}
-
 void ProxyingURLLoaderFactory::InProgressRequest::OnReceiveEarlyHints(
     network::mojom::EarlyHintsPtr early_hints) {
   target_client_->OnReceiveEarlyHints(std::move(early_hints));
@@ -241,8 +229,10 @@ void ProxyingURLLoaderFactory::InProgressRequest::OnReceiveEarlyHints(
 
 void ProxyingURLLoaderFactory::InProgressRequest::OnReceiveResponse(
     network::mojom::URLResponseHeadPtr head,
-    mojo::ScopedDataPipeConsumerHandle body) {
+    mojo::ScopedDataPipeConsumerHandle body,
+    std::optional<mojo_base::BigBuffer> cached_metadata) {
   current_body_ = std::move(body);
+  current_cached_metadata_ = std::move(cached_metadata);
   if (current_request_uses_header_client_) {
     // Use the headers we got from OnHeadersReceived as that'll contain
     // Set-Cookie if it existed.
@@ -290,19 +280,9 @@ void ProxyingURLLoaderFactory::InProgressRequest::OnUploadProgress(
                                    std::move(callback));
 }
 
-void ProxyingURLLoaderFactory::InProgressRequest::OnReceiveCachedMetadata(
-    mojo_base::BigBuffer data) {
-  target_client_->OnReceiveCachedMetadata(std::move(data));
-}
-
 void ProxyingURLLoaderFactory::InProgressRequest::OnTransferSizeUpdated(
     int32_t transfer_size_diff) {
   target_client_->OnTransferSizeUpdated(transfer_size_diff);
-}
-
-void ProxyingURLLoaderFactory::InProgressRequest::OnStartLoadingResponseBody(
-    mojo::ScopedDataPipeConsumerHandle body) {
-  target_client_->OnStartLoadingResponseBody(std::move(body));
 }
 
 void ProxyingURLLoaderFactory::InProgressRequest::OnComplete(
@@ -351,7 +331,7 @@ void ProxyingURLLoaderFactory::InProgressRequest::OnBeforeSendHeaders(
     const net::HttpRequestHeaders& headers,
     OnBeforeSendHeadersCallback callback) {
   if (!current_request_uses_header_client_) {
-    std::move(callback).Run(net::OK, absl::nullopt);
+    std::move(callback).Run(net::OK, std::nullopt);
     return;
   }
 
@@ -365,7 +345,7 @@ void ProxyingURLLoaderFactory::InProgressRequest::OnHeadersReceived(
     const net::IPEndPoint& remote_endpoint,
     OnHeadersReceivedCallback callback) {
   if (!current_request_uses_header_client_) {
-    std::move(callback).Run(net::OK, absl::nullopt, GURL());
+    std::move(callback).Run(net::OK, std::nullopt, GURL());
 
     if (for_cors_preflight_) {
       // CORS preflight is supported only when "extraHeaders" is specified.
@@ -410,7 +390,7 @@ void ProxyingURLLoaderFactory::InProgressRequest::
       net::SiteForCookies::FromUrl(redirect_url_);
 
   auto head = network::mojom::URLResponseHead::New();
-  std::string headers = base::StringPrintf(
+  std::string headers = absl::StrFormat(
       "HTTP/1.1 %i Internal Redirect\n"
       "Location: %s\n"
       "Non-Authoritative-Reason: WebRequest API\n\n",
@@ -551,10 +531,10 @@ void ProxyingURLLoaderFactory::InProgressRequest::ContinueToSendHeaders(
         removed_headers.begin(), removed_headers.end());
 
     for (auto& set_header : set_headers) {
-      std::string header_value;
-      if (request_.headers.GetHeader(set_header, &header_value)) {
+      auto header = request_.headers.GetHeader(set_header);
+      if (header) {
         pending_follow_redirect_params_->modified_headers.SetHeader(
-            set_header, header_value);
+            set_header, header.value());
       } else {
         NOTREACHED();
       }
@@ -590,7 +570,7 @@ void ProxyingURLLoaderFactory::InProgressRequest::
   }
 
   DCHECK(on_headers_received_callback_);
-  absl::optional<std::string> headers;
+  std::optional<std::string> headers;
   if (override_headers_) {
     headers = override_headers_->raw_headers();
     if (current_request_uses_header_client_) {
@@ -675,7 +655,8 @@ void ProxyingURLLoaderFactory::InProgressRequest::ContinueToResponseStarted(
 
   factory_->web_request_api()->OnResponseStarted(&info_.value(), request_);
   target_client_->OnReceiveResponse(current_response_.Clone(),
-                                    std::move(current_body_));
+                                    std::move(current_body_),
+                                    std::move(current_cached_metadata_));
 }
 
 void ProxyingURLLoaderFactory::InProgressRequest::ContinueToBeforeRedirect(
@@ -757,7 +738,7 @@ ProxyingURLLoaderFactory::ProxyingURLLoaderFactory(
     int frame_routing_id,
     uint64_t* request_id_generator,
     std::unique_ptr<extensions::ExtensionNavigationUIData> navigation_ui_data,
-    absl::optional<int64_t> navigation_id,
+    std::optional<int64_t> navigation_id,
     mojo::PendingReceiver<network::mojom::URLLoaderFactory> loader_request,
     mojo::PendingRemote<network::mojom::URLLoaderFactory> target_factory_remote,
     mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
@@ -813,18 +794,23 @@ void ProxyingURLLoaderFactory::CreateLoaderAndStart(
   }
 
   // Check if user has intercepted this scheme.
-  auto it = intercepted_handlers_.find(request.url.scheme());
-  if (it != intercepted_handlers_.end()) {
-    mojo::PendingRemote<network::mojom::URLLoaderFactory> loader_remote;
-    this->Clone(loader_remote.InitWithNewPipeAndPassReceiver());
+  bool bypass_custom_protocol_handlers =
+      options & kBypassCustomProtocolHandlers;
+  if (!bypass_custom_protocol_handlers) {
+    auto it = intercepted_handlers_->find(request.url.scheme_piece());
+    if (it != intercepted_handlers_->end()) {
+      mojo::PendingRemote<network::mojom::URLLoaderFactory> loader_remote;
+      this->Clone(loader_remote.InitWithNewPipeAndPassReceiver());
 
-    // <scheme, <type, handler>>
-    it->second.second.Run(
-        request, base::BindOnce(&ElectronURLLoaderFactory::StartLoading,
-                                std::move(loader), request_id, options, request,
-                                std::move(client), traffic_annotation,
-                                std::move(loader_remote), it->second.first));
-    return;
+      // <scheme, <type, handler>>
+      it->second.second.Run(
+          request,
+          base::BindOnce(&ElectronURLLoaderFactory::StartLoading,
+                         std::move(loader), request_id, options, request,
+                         std::move(client), traffic_annotation,
+                         std::move(loader_remote), it->second.first));
+      return;
+    }
   }
 
   // The loader of ServiceWorker forbids loading scripts from file:// URLs, and

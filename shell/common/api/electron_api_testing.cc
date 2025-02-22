@@ -27,7 +27,7 @@ void Log(int severity, std::string text) {
       break;
     case logging::LOGGING_FATAL:
       LOG(FATAL) << text;
-      break;
+      // break not needed here because LOG(FATAL) is [[noreturn]]
     default:
       LOG(ERROR) << "Unrecognized severity: " << severity;
       break;
@@ -44,5 +44,5 @@ void Initialize(v8::Local<v8::Object> exports,
 
 }  // namespace
 
-NODE_LINKED_MODULE_CONTEXT_AWARE(electron_common_testing, Initialize)
+NODE_LINKED_BINDING_CONTEXT_AWARE(electron_common_testing, Initialize)
 #endif
